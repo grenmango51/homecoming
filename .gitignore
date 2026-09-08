@@ -1,0 +1,6 @@
+.browser-profile/
+.flight_cache/
+flight_results/
+__pycache__/
+.venv/
+*.pyc
