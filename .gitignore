@@ -1,6 +1,9 @@
 .browser-profile/
 .flight_cache/
 flight_results/
+.skyscanner-profile/
+.skyscanner*-profile/
+flight_results_skyscanner/
 __pycache__/
 .venv/
 *.pyc
