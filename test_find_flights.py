@@ -16,6 +16,27 @@ class FlightReportTests(unittest.TestCase):
         ]
         self.assertEqual(len(pairs), 25)
 
+    def test_build_search_pairs_window_mode_generates_66_pairs(self) -> None:
+        pairs = flights.build_search_pairs(window_start="2026-12-09", window_end="2027-01-09", min_stay_nights=21)
+        self.assertEqual(len(pairs), 66)
+        self.assertEqual(pairs[0], (flights.dt.date(2026, 12, 9), flights.dt.date(2026, 12, 30)))
+        self.assertEqual(pairs[-1], (flights.dt.date(2026, 12, 19), flights.dt.date(2027, 1, 9)))
+        self.assertIn((flights.dt.date(2026, 12, 9), flights.dt.date(2027, 1, 9)), pairs)
+        for dep, ret in pairs:
+            self.assertGreaterEqual((ret - dep).days, 21)
+            self.assertGreaterEqual(dep, flights.dt.date(2026, 12, 9))
+            self.assertLessEqual(ret, flights.dt.date(2027, 1, 9))
+
+    def test_build_search_pairs_range_mode_generates_25_pairs(self) -> None:
+        pairs = flights.build_search_pairs(
+            depart_from="2026-12-09",
+            depart_to="2026-12-13",
+            return_from="2027-01-05",
+            return_to="2027-01-09",
+            min_stay_nights=21,
+        )
+        self.assertEqual(len(pairs), 25)
+
     def test_parses_google_euro_text_in_both_accessible_formats(self) -> None:
         self.assertEqual(flights.money_values("Cheapest from €800. From 1,004 euros round trip total."), [800.0, 1004.0])
 

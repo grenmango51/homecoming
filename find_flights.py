@@ -54,6 +54,45 @@ def date_range(start: str, end: str) -> list[dt.date]:
     return [first + dt.timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
+def build_search_pairs(
+    *,
+    window_start: str | None = None,
+    window_end: str | None = None,
+    depart_from: str | None = None,
+    depart_to: str | None = None,
+    return_from: str | None = None,
+    return_to: str | None = None,
+    min_stay_nights: int = 21,
+) -> list[tuple[dt.date, dt.date]]:
+    """Generate date pairs for either a continuous trip window or explicit ranges."""
+    if window_start and window_end:
+        start_d = dt.date.fromisoformat(window_start)
+        end_d = dt.date.fromisoformat(window_end)
+        if end_d < start_d:
+            raise ValueError(f"Window end {window_end} is before start date {window_start}.")
+        pairs: list[tuple[dt.date, dt.date]] = []
+        cur_dep = start_d
+        while cur_dep <= end_d:
+            cur_ret = cur_dep + dt.timedelta(days=min_stay_nights)
+            while cur_ret <= end_d:
+                pairs.append((cur_dep, cur_ret))
+                cur_ret += dt.timedelta(days=1)
+            cur_dep += dt.timedelta(days=1)
+        return pairs
+
+    if not (depart_from and depart_to and return_from and return_to):
+        raise ValueError("Must specify either window_start/window_end or full depart/return ranges.")
+
+    departures = date_range(depart_from, depart_to)
+    returns = date_range(return_from, return_to)
+    return [
+        (departure, return_date)
+        for departure in departures
+        for return_date in returns
+        if (return_date - departure).days >= min_stay_nights
+    ]
+
+
 def resolve_browser_executable(requested: str | None) -> str | None:
     """Prefer an installed stable browser when Playwright Chromium is unusable.
 
@@ -364,9 +403,20 @@ def failed_observation(
 
 
 async def run(args: argparse.Namespace) -> int:
-    departures = date_range(args.depart_from, args.depart_to)
-    returns = date_range(args.return_from, args.return_to)
-    pairs = [(departure, return_date) for departure in departures for return_date in returns if (return_date - departure).days >= args.min_stay_nights]
+    if args.depart_from:
+        pairs = build_search_pairs(
+            depart_from=args.depart_from,
+            depart_to=args.depart_to,
+            return_from=args.return_from,
+            return_to=args.return_to,
+            min_stay_nights=args.min_stay_nights,
+        )
+    else:
+        pairs = build_search_pairs(
+            window_start=args.window_start,
+            window_end=args.window_end,
+            min_stay_nights=args.min_stay_nights,
+        )
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")
 
@@ -374,11 +424,13 @@ async def run(args: argparse.Namespace) -> int:
     results_dir = Path(args.results_dir).resolve()
     browser_executable = resolve_browser_executable(args.browser_executable)
     profile_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     print(f"Scanning {len(pairs)} exact date pairs in a visible browser. Results: {results_dir}")
     print("If Google shows consent, sign-in, or a challenge, handle it yourself in the opened browser.")
     if browser_executable:
         print(f"Using installed browser: {browser_executable}")
 
+    today_stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
     async with async_playwright() as playwright:
         context: BrowserContext = await playwright.chromium.launch_persistent_context(
             str(profile_dir),
@@ -392,6 +444,18 @@ async def run(args: argparse.Namespace) -> int:
         observations: list[dict[str, Any]] = []
         try:
             for index, (departure, return_date) in enumerate(pairs, start=1):
+                pair_file = results_dir / f"{departure}_{return_date}.json"
+                if args.skip_existing and pair_file.exists():
+                    try:
+                        cached = json.loads(pair_file.read_text(encoding="utf-8"))
+                        if cached.get("status") == "observed" and cached.get("fetched_at", "").startswith(today_stamp):
+                            print(f"[{index}/{len(pairs)}] {departure} -> {return_date} (cached from today: €{cached.get('lowest_observed_price_eur')})")
+                            observations.append(cached)
+                            report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
+                            continue
+                    except Exception:
+                        pass
+
                 print(f"[{index}/{len(pairs)}] {departure} -> {return_date}")
                 try:
                     observation = await scan_pair(
@@ -448,13 +512,16 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Human-supervised Google Flights matrix scanner (no purchase actions).")
     result.add_argument("--origin", default="HEL")
     result.add_argument("--dest", default="HAN")
-    result.add_argument("--depart-from", default="2026-12-09")
-    result.add_argument("--depart-to", default="2026-12-13")
-    result.add_argument("--return-from", default="2027-01-05")
-    result.add_argument("--return-to", default="2027-01-09")
-    result.add_argument("--min-stay-nights", type=int, default=21)
-    result.add_argument("--delay-seconds", type=int, default=8, help="Delay between pages; keep this modest and human-supervised.")
+    result.add_argument("--window-start", default="2026-12-09", help="Earliest allowed departure date (default: 2026-12-09)")
+    result.add_argument("--window-end", default="2027-01-09", help="Latest allowed return date (default: 2027-01-09)")
+    result.add_argument("--depart-from", help="Optional explicit start of departure range")
+    result.add_argument("--depart-to", help="Optional explicit end of departure range")
+    result.add_argument("--return-from", help="Optional explicit start of return range")
+    result.add_argument("--return-to", help="Optional explicit end of return range")
+    result.add_argument("--min-stay-nights", type=int, default=21, help="Minimum stay duration in nights (default: 21)")
+    result.add_argument("--delay-seconds", type=int, default=3, help="Delay between pages in seconds (default: 3)")
     result.add_argument("--timeout-seconds", type=int, default=30)
+    result.add_argument("--skip-existing", action="store_true", help="Skip querying pairs already successfully observed today")
     result.add_argument("--profile-dir", default=str(DEFAULT_PROFILE_DIR))
     result.add_argument("--results-dir", default=str(DEFAULT_RESULTS_DIR))
     result.add_argument("--browser-executable", help="Optional path to Chrome/Edge. Defaults to installed Chrome or Edge on Windows.")
