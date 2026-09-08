@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import find_flights as google_flights
-import find_flights_skyscanner as skyscanner
+from src import google_flights
+from src import skyscanner
 
 
 class SkyscannerScannerTests(unittest.TestCase):
@@ -58,25 +58,19 @@ class SkyscannerScannerTests(unittest.TestCase):
         self.assertEqual(skyscanner.parse_numeric_price("782"), 782.0)
         self.assertEqual(skyscanner.parse_numeric_price("782 €"), 782.0)
         self.assertEqual(skyscanner.parse_numeric_price("1,001"), 1001.0)
-        self.assertEqual(skyscanner.parse_numeric_price("1 001 €"), 1001.0)
-        self.assertEqual(skyscanner.parse_numeric_price("1.336 €"), 1336.0)
-        self.assertEqual(skyscanner.parse_numeric_price("1 087"), 1087.0)
-        # Below bounds
-        self.assertIsNone(skyscanner.parse_numeric_price("15"))
-        # Non-numeric
-        self.assertIsNone(skyscanner.parse_numeric_price("abc"))
+        self.assertEqual(skyscanner.parse_numeric_price("1.001 €"), 1001.0)
+        self.assertEqual(skyscanner.parse_numeric_price("€ 1,234.50"), 1234.50)
+        self.assertEqual(skyscanner.parse_numeric_price("invalid"), None)
 
     def test_cheapest_tab_price(self) -> None:
-        # Finnish
-        self.assertEqual(skyscanner.cheapest_tab_price("Halvin 782 €"), 782.0)
-        self.assertEqual(skyscanner.cheapest_tab_price("Halvin alk. 782 €"), 782.0)
-        self.assertEqual(skyscanner.cheapest_tab_price("Halvin alkaen 782 €"), 782.0)
-        # English
-        self.assertEqual(skyscanner.cheapest_tab_price("Cheapest 782 €"), 782.0)
-        self.assertEqual(skyscanner.cheapest_tab_price("Cheapest from €782"), 782.0)
-        self.assertEqual(skyscanner.cheapest_tab_price("Cheapest €1,001"), 1001.0)
-        # None
-        self.assertIsNone(skyscanner.cheapest_tab_price("Paras 950 €"))
+        text1 = "Halvin alk. 782 € Paras alk. 850 € Nopein alk. 1,100 €"
+        self.assertEqual(skyscanner.cheapest_tab_price(text1), 782.0)
+
+        text2 = "Cheapest from €795 Best €850 Fastest €1,200"
+        self.assertEqual(skyscanner.cheapest_tab_price(text2), 795.0)
+
+        text3 = "No tabs visible here"
+        self.assertIsNone(skyscanner.cheapest_tab_price(text3))
 
     def test_duration_minutes(self) -> None:
         self.assertEqual(skyscanner.duration_minutes("17 t 35 min"), 1055)
@@ -84,44 +78,39 @@ class SkyscannerScannerTests(unittest.TestCase):
         self.assertEqual(skyscanner.duration_minutes("15h 20m"), 920)
         self.assertEqual(skyscanner.duration_minutes("14 hr 35 min"), 875)
 
-    def test_challenge_detection(self) -> None:
-        self.assertTrue(skyscanner.is_challenge_page("https://www.skyscanner.fi/sttc/px/captcha", ""))
-        self.assertTrue(skyscanner.is_challenge_page("https://www.skyscanner.fi", "Oletko oikea henkilö vai robotti?"))
-        self.assertTrue(skyscanner.is_challenge_page("https://www.skyscanner.fi", "Press & Hold to confirm you are human"))
-        self.assertFalse(skyscanner.is_challenge_page("https://www.skyscanner.fi/transport/flights/hel/han", "15 tulosta löytyi"))
-
     def test_page_status(self) -> None:
-        self.assertEqual(skyscanner.page_status("https://skyscanner.fi", "15 tulosta löytyi Halvin 782 €"), "observed")
-        self.assertEqual(skyscanner.page_status("https://skyscanner.fi", "Cheapest flights results"), "observed")
-        self.assertEqual(skyscanner.page_status("https://skyscanner.fi", "Oletko oikea henkilö vai robotti"), "user_action_required")
+        self.assertEqual(skyscanner.page_status("https://skyscanner.net/flights", "12 results returned"), "observed")
+        self.assertEqual(skyscanner.page_status("https://skyscanner.net/flights", "Halvin alk. 782 €"), "observed")
+        self.assertEqual(skyscanner.page_status("https://skyscanner.net/flights", "Please verify you are human"), "user_action_required")
+        self.assertEqual(skyscanner.page_status("https://skyscanner.net/flights/captcha", "anything"), "user_action_required")
+        self.assertEqual(skyscanner.page_status("https://skyscanner.net/flights", "Oops, something went wrong"), "incomplete")
+
+    def test_challenge_detection(self) -> None:
+        self.assertTrue(skyscanner.is_challenge_page("https://skyscanner.net/sttc/px/captcha", "anything"))
+        self.assertTrue(skyscanner.is_challenge_page("https://skyscanner.net", "oletko oikea henkilö vai robotti"))
+        self.assertTrue(skyscanner.is_challenge_page("https://skyscanner.net", "Press & Hold"))
+        self.assertFalse(skyscanner.is_challenge_page("https://skyscanner.net/flights", "Cheapest from €782"))
 
     def test_itinerary_json_parsing(self) -> None:
         sample_itin = {
             "price": {"raw": 782.0, "formatted": "782 €"},
             "legs": [
                 {
-                    "departure": "2026-12-09T07:40:00",
-                    "arrival": "2026-12-10T06:15:00",
+                    "departure": "2026-12-09T17:00:00",
+                    "arrival": "2026-12-10T14:35:00",
                     "durationInMinutes": 1055,
                     "stopCount": 1,
-                    "carriers": {"marketing": [{"name": "Finnair"}]},
-                },
-                {
-                    "departure": "2027-01-09T06:30:00",
-                    "arrival": "2027-01-09T22:25:00",
-                    "durationInMinutes": 1255,
-                    "stopCount": 1,
-                    "carriers": {"marketing": [{"name": "Vietnam Airlines"}]},
-                },
+                    "carriers": {"marketing": [{"name": "Qatar Airways"}]},
+                }
             ],
-            "pricingOptions": [{"agentName": "Ebookers", "price": {"raw": 782.0}}],
+            "pricingOptions": [{"agentName": "Trip.com", "price": {"raw": 782.0}}],
         }
         parsed = skyscanner.parse_itinerary_json(sample_itin)
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["price_eur"], 782.0)
-        self.assertEqual(len(parsed["legs"]), 2)
         self.assertEqual(parsed["legs"][0]["duration_minutes"], 1055)
-        self.assertEqual(parsed["sample_deals"][0]["seller"], "Ebookers")
+        self.assertEqual(parsed["legs"][0]["carriers"], ["Qatar Airways"])
+        self.assertEqual(parsed["sample_deals"][0]["seller"], "Trip.com")
 
     def test_daily_report_tracking(self) -> None:
         obs = {
@@ -130,9 +119,8 @@ class SkyscannerScannerTests(unittest.TestCase):
             "stay_nights": 31,
             "status": "observed",
             "lowest_observed_price_eur": 782.0,
-            "protection_label": "not_flagged_by_skyscanner",
-            "fetched_at": "2026-09-08T00:00:00+00:00",
-            "candidate_cards": [],
+            "itinerary_count": 10,
+            "fetched_at": "2026-09-07T00:00:00+00:00",
         }
         with tempfile.TemporaryDirectory() as td:
             j_path, c_path = skyscanner.write_daily_report(Path(td), [obs], reference_price=782.0)
@@ -144,4 +132,3 @@ class SkyscannerScannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

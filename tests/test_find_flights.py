@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import find_flights as flights
+from src import google_flights as flights
 
 
 class FlightReportTests(unittest.TestCase):
@@ -100,14 +100,16 @@ class FlightReportTests(unittest.TestCase):
             destination="HAN",
             departure=flights.dt.date(2026, 12, 9),
             return_date=flights.dt.date(2027, 1, 9),
-            page_text="6 results returned. Cheapest from €1,064. Footer terms €118 fee.",
+            page_text="6 results returned. Top departing flights\nCheapest from €800\nPrivacy Terms €350",
             candidates=[
-                "Qatar Airways 16 hr 15 min €1,064 round trip",
-                "Emirates 15 hr 55 min €1,165 round trip",
+                "Finnair, Qatar Airways 16 hr 15 min HEL–HAN 1 stop €850 round trip separate tickets booked together",
+                "Turkish Airlines 19 hr HEL–HAN 1 stop €1,004 round trip",
             ],
         )
+        self.assertEqual(obs["lowest_observed_price_eur"], 800.0)
         self.assertEqual(obs["status"], "observed")
-        self.assertEqual(obs["lowest_observed_price_eur"], 1064.0)
+        self.assertEqual(obs["stay_nights"], 31)
+        self.assertEqual(obs["protection_label"], "separate_tickets")
         self.assertEqual(len(obs["candidate_cards"]), 2)
         self.assertEqual(obs["candidate_cards"][0]["observed_duration_minutes"], 975)
 

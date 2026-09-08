@@ -1,0 +1,94 @@
+# ==============================================================================
+# FLIGHT TRACKER CONFIGURATION
+# Single source of truth for both Google Flights & Skyscanner scanners.
+# Edit all parameters in this file and run everything via `.\run_all.ps1`.
+# ==============================================================================
+
+[trip]
+# Departure and arrival airport codes (IATA 3-letter uppercase)
+origin = "HEL"
+dest = "HAN"
+
+# Minimum stay duration at destination in nights
+min_stay_nights = 21
+
+# Strategy for generating search date pairs:
+# - "range": Cartesian product of departure dates and return dates (e.g. 5x5 = 25 pairs)
+# - "window": All valid departures & returns inside the full holiday window (e.g. 66 pairs)
+date_mode = "range"
+
+# ------------------------------------------------------------------------------
+# Date settings for "range" mode (active when date_mode = "range")
+# ------------------------------------------------------------------------------
+depart_from = "2026-12-09"
+depart_to = "2026-12-13"
+return_from = "2027-01-05"
+return_to = "2027-01-09"
+
+# ------------------------------------------------------------------------------
+# Date settings for "window" mode (active when date_mode = "window")
+# ------------------------------------------------------------------------------
+window_start = "2026-12-09"
+window_end = "2027-01-09"
+
+[execution]
+# Execution strategy:
+# - "parallel": Run both Google Flights and Skyscanner scrapers at the same time
+# - "sequential": Run Google Flights first, then Skyscanner
+strategy = "parallel"
+
+# Skip querying pairs already observed today (enables fast resuming if interrupted)
+skip_existing = true
+
+# Automatically run cross-platform price comparison report once scraping finishes
+auto_compare = true
+
+# Optional path to local Chrome or Edge executable. Leave empty to auto-detect.
+browser_executable = ""
+
+[google_flights]
+# Whether to run Google Flights in the unified execution
+enabled = true
+
+# Delay between page loads in seconds
+delay_seconds = 3
+
+# Page load timeout in seconds
+timeout_seconds = 30
+
+# Sanity check reference price in EUR for 2026-12-09 -> 2027-01-09.
+# Set to 0 (or omit) to disable this check (e.g. when searching different dates or routes).
+reference_price = 800.0
+
+# Dedicated browser profile directory (relative to project root)
+profile_dir = ".browser-profile"
+
+# Results output directory (relative to project root)
+results_dir = "flight_results"
+
+[skyscanner]
+# Whether to run Skyscanner in the unified execution
+enabled = true
+
+# Delay between searches in seconds
+delay_seconds = 4
+
+# Page load timeout in seconds
+timeout_seconds = 35
+
+# Wait time in seconds if manual challenge / CAPTCHA solving is required
+challenge_timeout_seconds = 90
+
+# Sanity check reference price in EUR for 2026-12-09 -> 2027-01-09.
+# Set to 0 (or omit) to disable this check (e.g. when searching different dates or routes).
+reference_price = 782.0
+
+# Dedicated browser profile directory (relative to project root)
+profile_dir = ".skyscanner-profile"
+
+# Results output directory (relative to project root)
+results_dir = "flight_results_skyscanner"
+
+[comparison]
+# Directory where the cross-platform comparison reports will be saved
+output_dir = "flight_results"

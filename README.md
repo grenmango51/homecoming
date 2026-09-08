@@ -113,27 +113,60 @@ Skyscanner can be run for **any airport codes and dates** directly using command
 
 ---
 
+## Centralized Configuration (`config/config.toml`)
+
+All search dates, airport codes, stay durations, polite pauses, timeouts, reference benchmarks, and execution settings are maintained in a single editable file:
+
+📂 [`config/config.toml`](file:///d:/Hoai%20Anh/Aalto/Hobbies/Google%20flights/config/config.toml)
+
+```toml
+[trip]
+origin = "HEL"
+dest = "HAN"
+min_stay_nights = 21
+
+# "range" (Cartesian product) or "window" (full holiday span)
+date_mode = "range"
+
+depart_from = "2026-12-09"
+depart_to = "2026-12-13"
+return_from = "2027-01-05"
+return_to = "2027-01-09"
+
+[execution]
+strategy = "parallel"      # "parallel" (both run at the same time) or "sequential"
+skip_existing = true       # Skip queries already recorded today
+auto_compare = true        # Automatically print comparison table after scans
+```
+
+---
+
 ## Running Scans & Daily Automation
 
-PowerShell runner scripts are provided for convenience:
+### 1. Unified Parallel Execution (Recommended)
+Run **both** Google Flights and Skyscanner concurrently, followed by the automatic price comparison table:
 
-### 1. Run Skyscanner Daily Scan
 ```powershell
+# PowerShell one-click launcher
+.\run_all.ps1
+
+# Or directly via Python:
+.\.venv\Scripts\python.exe run_all.py
+```
+
+### 2. Standalone Platform Scans (Optional)
+If you wish to run a specific scraper in isolation:
+
+```powershell
+# Run Skyscanner only
 .\run_daily_skyscanner.ps1
-```
-Scans the default 25 date pairs (or reference pair with custom flags). Resumes automatically from where it left off if interrupted (using `--skip-existing`).
 
-### 2. Run Google Flights Daily Scan
-```powershell
+# Run Google Flights only
 .\run_daily.ps1
-```
-Runs the Google Flights scan, records observations, and verifies integrity against the baseline reference price.
 
-### 3. Run Cross-Platform Price Comparison
-```powershell
+# Run Cross-Platform Price Comparison only
 .\run_compare.ps1
 ```
-Matches date pairs between Google Flights and Skyscanner, calculates the price difference, highlights the cheaper option, and prints a sorted summary table.
 
 ---
 
@@ -209,7 +242,7 @@ All scraped data is stored locally in the project directories:
 Run the full automated unit test suite:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest test_find_flights.py test_skyscanner.py test_compare_flights.py -v
+.\.venv\Scripts\python.exe -m unittest discover tests -v
 ```
 
-All 27 test cases validate date generation, URL construction, European price formats, regex parsing, anti-bot classification, and cross-platform arbitrage calculation.
+All 31 test cases validate TOML configuration parsing, date generation (both range and window modes), URL construction, European price formats, regex parsing, anti-bot classification, and cross-platform arbitrage calculation.

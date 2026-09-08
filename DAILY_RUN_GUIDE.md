@@ -6,36 +6,33 @@ This guide explains how to run the Google Flights fare tracker daily on Windows 
 
 ## 1. How It Works (Important Context)
 
+- **Central Configuration (`config/config.toml`)**:
+  All parameters (dates, routes, delay times, timeouts, reference benchmarks, and parallel execution mode) are maintained in a single editable file: `config/config.toml`.
+- **Parallel Multi-Platform Scanning**:
+  Running `run_all.ps1` launches Google Flights and Skyscanner in parallel, scans matching date pairs, and automatically generates a side-by-side price comparison table.
 - **Headful / Visible Browser Required**:
-  Google Flights employs advanced anti-bot heuristics that detect headless automation (`navigator.webdriver`). In headless mode, Google Flights suppresses flight results.
-  Therefore, this tool uses a visible Chrome window with `--disable-blink-features=AutomationControlled` using a dedicated private profile folder (`.browser-profile`).
-- **Resuming with `--skip-existing`**:
-  If a daily scan is ever stopped or interrupted midway through its 66 pairs, re-running with `--skip-existing` immediately resumes from where it left off, reading today's already observed pairs from disk and scanning only the remaining dates.
+  Google Flights and Skyscanner employ anti-bot heuristics that detect headless automation (`navigator.webdriver`). In headless mode, search results are suppressed.
+  Therefore, this tool uses visible browser windows with isolated persistent profile folders (`.browser-profile` and `.skyscanner-profile`).
+- **Resuming with `skip_existing = true`**:
+  If a daily scan is ever stopped or interrupted midway through, re-running immediately resumes from where it left off, reading today's already observed pairs from disk and scanning only the remaining dates.
 - **Reference Price Check**:
-  Every daily report verifies the €800 target reference pair (Dec 9, 2026 to Jan 9, 2027) as an automated integrity check.
+  Every daily report verifies the baseline reference pair (Dec 9, 2026 to Jan 9, 2027) as an automated integrity check.
 
 ---
 
 ## 2. Running On-Demand (Manual Execution)
 
-### Option A: One-Click Batch File (Easiest)
-Simply double-click:
-```
-d:\Hoai Anh\Aalto\Hobbies\Google flights\run_daily.bat
-```
-This activates the virtual environment, executes the 66-pair matrix with `--skip-existing`, and leaves the console open so you can view the summary.
-
-### Option B: PowerShell Runner
-Open PowerShell in this directory:
+### Option A: Unified Parallel Runner (Recommended)
+Open PowerShell in this directory and run:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\run_daily.ps1
+powershell -ExecutionPolicy Bypass -File .\run_all.ps1
 ```
-This logs output to `flight_results/logs/run_YYYY-MM-DD.log` and prints a neat sorted table of the Top 10 cheapest flights found today.
+This runs both scrapers concurrently, saves logs to `flight_results/logs/` and `flight_results_skyscanner/logs/`, and prints the cross-platform comparison arbitrage table.
 
-### Option C: Direct Python CLI
-```powershell
-.\.venv\Scripts\python.exe find_flights.py --skip-existing --delay-seconds 3
-```
+### Option B: Standalone Platform Scanners
+- **Google Flights only**: `powershell -ExecutionPolicy Bypass -File .\run_daily.ps1`
+- **Skyscanner only**: `powershell -ExecutionPolicy Bypass -File .\run_daily_skyscanner.ps1`
+- **Price Comparison only**: `powershell -ExecutionPolicy Bypass -File .\run_compare.ps1`
 
 ---
 
