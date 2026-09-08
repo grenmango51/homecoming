@@ -38,13 +38,11 @@ GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 # one adult, economy. The dates are replaced below before every direct search.
 TFS_TEMPLATE = (
     "CBwQAhooEgoyMDI2LTEyLTA5agwIAhIIL20vMDNraG5yDAgDEggvbS8wZm5mZhoo"
-    "EgoyMDI3LTAxLTA5agwIAxIIL20vMGZuZmYrDAgCEggvbS8wM2tobkABSAFwAYIBCwj"
     "EgoyMDI3LTAxLTA5agwIAxIIL20vMGZuZmZyDAgCEggvbS8wM2tobkABSAFwAYIBCwj"
     "___________8BmAEB"
 )
 PRICE_RE = re.compile(r"(?:€\s*|EUR\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
 EUROS_RE = re.compile(r"\b([0-9][0-9.,\s]*)\s+euros?\b", re.IGNORECASE)
-DURATION_RE = re.compile(r"\b(\d{1,2})h(?:\s*(\d{1,2})m)?\b", re.IGNORECASE)
 DURATION_RE = re.compile(r"\b(\d{1,2})\s*(?:h|hr|hours?)\s*(?:(\d{1,2})\s*(?:m|min|minutes?))?\b", re.IGNORECASE)
 CHEAPEST_BANNER_RE = re.compile(r"cheapest\s+(?:from\s+)?(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
 
@@ -100,8 +98,7 @@ def flight_search_url(origin: str, destination: str, departure: dt.date, return_
     raw = raw.replace(b"2026-12-09", departure.isoformat().encode(), 1)
     raw = raw.replace(b"2027-01-09", return_date.isoformat().encode(), 1)
     encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
-    return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&tfu=EgYIABAAGAA&hl=en&curr=EUR"
-    return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&tfu=EgYIACACKAEiAA&hl=en&curr=EUR"
+    return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&hl=en&curr=EUR"
 
 
 def money_values(text: str) -> list[float]:
@@ -121,9 +118,6 @@ def duration_minutes(value: str) -> int | None:
     if not match:
         return None
     return int(match.group(1)) * 60 + int(match.group(2) or 0)
-    hours = int(match.group(1))
-    minutes = int(match.group(2) or 0)
-    return hours * 60 + minutes
 
 
 def cheapest_banner_price(text: str) -> float | None:
@@ -146,7 +140,7 @@ def protection_label(text: str) -> str:
 
 async def visible_candidate_blocks(page: Page) -> list[str]:
     """Return flight-card text, without relying on generated Google CSS classes."""
-    locators = page.locator("li[role='listitem'], [role='listitem'], li.pIav2d")
+    locators = page.locator("ul.Rk10dc > li, li[role='listitem'], [role='listitem'], li.pIav2d")
     count = await locators.count()
     candidates: list[str] = []
     seen: set[str] = set()
@@ -184,8 +178,8 @@ async def wait_for_results(page: Page, timeout_ms: int) -> str:
         )
     except Exception:
         pass
-    # Brief stabilization pause for flight cards to finish rendering
-    await page.wait_for_timeout(1000)
+    # Brief stabilization pause for flight cards and cheapest banner to finish rendering
+    await page.wait_for_timeout(2500)
     return await page.locator("body").inner_text()
 
 
@@ -304,7 +298,10 @@ async def scan_pair(
     timeout_ms: int,
 ) -> dict[str, Any]:
     query_url = flight_search_url(origin, destination, departure, return_date)
-    await page.goto(query_url, wait_until="domcontentloaded")
+    try:
+        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        await page.goto(query_url, timeout=timeout_ms)
     # This is a first-run cookie-consent screen for the dedicated profile.
     # Choose the privacy-preserving option and let Google remember it there.
     try:
@@ -312,7 +309,7 @@ async def scan_pair(
         if await reject_btn.is_visible(timeout=min(timeout_ms, 3_000)):
             await reject_btn.click()
             await page.wait_for_timeout(500)
-            await page.goto(query_url, wait_until="domcontentloaded")
+            await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
         pass
     page_text = await wait_for_results(page, timeout_ms)
@@ -328,16 +325,6 @@ async def scan_pair(
         except Exception:
             await page.wait_for_timeout(2000)
         page_text = await wait_for_results(page, timeout_ms)
-
-    # Click "View more flights" if present to discover all options
-    try:
-        more_btn = page.get_by_text("View more flights", exact=False)
-        if await more_btn.count() > 0 and await more_btn.first.is_visible():
-            await more_btn.first.click(timeout=2000)
-            await page.wait_for_timeout(1500)
-            page_text = await page.locator("body").inner_text()
-    except Exception:
-        pass
 
     candidates = await visible_candidate_blocks(page)
     observation = make_observation(
@@ -399,6 +386,7 @@ async def run(args: argparse.Namespace) -> int:
             executable_path=browser_executable,
             locale="en-IE",
             viewport={"width": 1440, "height": 1000},
+            args=["--disable-blink-features=AutomationControlled"],
         )
         page = context.pages[0] if context.pages else await context.new_page()
         observations: list[dict[str, Any]] = []

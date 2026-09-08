@@ -27,6 +27,16 @@ class FlightReportTests(unittest.TestCase):
         self.assertIn(b"2026-12-10", raw)
         self.assertIn(b"2027-01-08", raw)
 
+    def test_tfs_template_is_valid_and_untruncated(self) -> None:
+        import base64
+        raw = base64.urlsafe_b64decode(flights.TFS_TEMPLATE + "=" * (-len(flights.TFS_TEMPLATE) % 4))
+        self.assertIn(b"2026-12-09", raw)
+        self.assertIn(b"2027-01-09", raw)
+        self.assertIn(b"/m/03khn", raw)
+        self.assertIn(b"/m/0fnff", raw)
+        self.assertEqual(raw.count(b"2026-12-09"), 1)
+        self.assertEqual(raw.count(b"2027-01-09"), 1)
+
     def test_daily_report_includes_reference_check_and_csv_rows(self) -> None:
         observation = {
             "departure_date": "2026-12-09",
