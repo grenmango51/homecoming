@@ -40,38 +40,27 @@ class FlightReportTests(unittest.TestCase):
     def test_parses_google_euro_text_in_both_accessible_formats(self) -> None:
         self.assertEqual(flights.money_values("Cheapest from €800. From 1,004 euros round trip total."), [800.0, 1004.0])
 
-    def test_direct_query_url_contains_the_requested_dates(self) -> None:
-        url = flights.flight_search_url("HEL", "HAN", flights.dt.date(2026, 12, 10), flights.dt.date(2027, 1, 8))
-        encoded = url.split("tfs=", 1)[1].split("&", 1)[0]
-        import base64
-        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-        self.assertIn(b"2026-12-10", raw)
-        self.assertIn(b"2027-01-08", raw)
+    def test_direct_query_url_contains_the_requested_route_and_dates(self) -> None:
+        url = flights.flight_search_url("PHL", "HAN", flights.dt.date(2026, 12, 10), flights.dt.date(2027, 1, 8))
+        self.assertIn("PHL", url)
+        self.assertIn("HAN", url)
+        self.assertIn("2026-12-10", url)
+        self.assertIn("2027-01-08", url)
 
-    def test_tfs_template_is_valid_and_untruncated(self) -> None:
-        import base64
-        raw = base64.urlsafe_b64decode(flights.TFS_TEMPLATE + "=" * (-len(flights.TFS_TEMPLATE) % 4))
-        self.assertIn(b"2026-12-09", raw)
-        self.assertIn(b"2027-01-09", raw)
-        self.assertIn(b"/m/03khn", raw)
-        self.assertIn(b"/m/0fnff", raw)
-        self.assertEqual(raw.count(b"2026-12-09"), 1)
-        self.assertEqual(raw.count(b"2027-01-09"), 1)
-
-    def test_daily_report_includes_reference_check_and_csv_rows(self) -> None:
+    def test_daily_report_includes_csv_and_json_rows(self) -> None:
         observation = {
-            "departure_date": "2026-12-09",
+            "departure_date": "2026-12-13",
             "return_date": "2027-01-09",
-            "stay_nights": 31,
+            "stay_nights": 27,
             "status": "observed",
             "lowest_observed_price_eur": 800.0,
             "protection_label": "not_flagged_by_google",
             "fetched_at": "2026-09-07T00:00:00+00:00",
         }
         with tempfile.TemporaryDirectory() as directory:
-            json_path, csv_path = flights.write_daily_report(Path(directory), [observation], 800.0)
+            json_path, csv_path = flights.write_daily_report(Path(directory), [observation])
             report = json.loads(json_path.read_text(encoding="utf-8"))
-            self.assertTrue(report["reference_matches_expected_price"])
+            self.assertEqual(len(report["observations"]), 1)
             self.assertEqual(len(csv_path.read_text(encoding="utf-8").splitlines()), 2)
 
     def test_duration_minutes_parses_various_formats(self) -> None:

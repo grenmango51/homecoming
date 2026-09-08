@@ -6,11 +6,11 @@
 
 [trip]
 # Departure and arrival airport codes (IATA 3-letter uppercase)
-origin = "HEL"
+origin = "PHL"
 dest = "HAN"
 
 # Minimum stay duration at destination in nights
-min_stay_nights = 21
+min_stay_nights = 18
 
 # Strategy for generating search date pairs:
 # - "range": Cartesian product of departure dates and return dates (e.g. 5x5 = 25 pairs)
@@ -20,15 +20,15 @@ date_mode = "range"
 # ------------------------------------------------------------------------------
 # Date settings for "range" mode (active when date_mode = "range")
 # ------------------------------------------------------------------------------
-depart_from = "2026-12-09"
-depart_to = "2026-12-13"
-return_from = "2027-01-05"
-return_to = "2027-01-09"
+depart_from = "2026-12-13"
+depart_to = "2026-12-16"
+return_from = "2027-01-09"
+return_to = "2027-01-10"
 
 # ------------------------------------------------------------------------------
 # Date settings for "window" mode (active when date_mode = "window")
 # ------------------------------------------------------------------------------
-window_start = "2026-12-09"
+window_start = "2026-12-13"
 window_end = "2027-01-09"
 
 [execution]
@@ -56,10 +56,6 @@ delay_seconds = 3
 # Page load timeout in seconds
 timeout_seconds = 30
 
-# Sanity check reference price in EUR for 2026-12-09 -> 2027-01-09.
-# Set to 0 (or omit) to disable this check (e.g. when searching different dates or routes).
-reference_price = 800.0
-
 # Dedicated browser profile directory (relative to project root)
 profile_dir = ".browser-profile"
 
@@ -79,10 +75,6 @@ timeout_seconds = 35
 # Wait time in seconds if manual challenge / CAPTCHA solving is required
 challenge_timeout_seconds = 90
 
-# Sanity check reference price in EUR for 2026-12-09 -> 2027-01-09.
-# Set to 0 (or omit) to disable this check (e.g. when searching different dates or routes).
-reference_price = 782.0
-
 # Dedicated browser profile directory (relative to project root)
 profile_dir = ".skyscanner-profile"
 
@@ -92,3 +84,4 @@ results_dir = "flight_results_skyscanner"
 [comparison]
 # Directory where the cross-platform comparison reports will be saved
 output_dir = "flight_results"
+

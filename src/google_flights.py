@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import csv
 import datetime as dt
 import json
@@ -42,13 +41,6 @@ DEFAULT_PROFILE_DIR = ROOT / ".browser-profile"
 DEFAULT_RESULTS_DIR = ROOT / "flight_results"
 GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 
-# Captured from the normal Google Flights result page for HEL–HAN round trip,
-# one adult, economy. The dates are replaced below before every direct search.
-TFS_TEMPLATE = (
-    "CBwQAhooEgoyMDI2LTEyLTA5agwIAhIIL20vMDNraG5yDAgDEggvbS8wZm5mZhoo"
-    "EgoyMDI3LTAxLTA5agwIAxIIL20vMGZuZmZyDAgCEggvbS8wM2tobkABSAFwAYIBCwj"
-    "___________8BmAEB"
-)
 CHEAPEST_BANNER_RE = re.compile(r"cheapest\s+(?:from\s+)?(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
 
 
@@ -58,18 +50,12 @@ def date_accessible_name(value: dt.date) -> str:
 
 
 def flight_search_url(origin: str, destination: str, departure: dt.date, return_date: dt.date) -> str:
-    """Build a direct Google Flights result URL from its own captured state.
+    """Build a direct Google Flights result URL for any route and date pair."""
+    orig = origin.strip().upper()
+    dest = destination.strip().upper()
+    return f"{GOOGLE_FLIGHTS}?q=Flights%20to%20{dest}%20from%20{orig}%20on%20{departure.isoformat()}%20through%20{return_date.isoformat()}&hl=en&curr=EUR"
 
-    The route fields in this project are intentionally fixed to HEL–HAN. Dates
-    are literal bytes in Google's query state and are the only fields varied.
-    """
-    if (origin, destination) != ("HEL", "HAN"):
-        raise ValueError("The direct URL template currently supports HEL to HAN only.")
-    raw = base64.urlsafe_b64decode(TFS_TEMPLATE + "=" * (-len(TFS_TEMPLATE) % 4))
-    raw = raw.replace(b"2026-12-09", departure.isoformat().encode(), 1)
-    raw = raw.replace(b"2027-01-09", return_date.isoformat().encode(), 1)
-    encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
-    return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&hl=en&curr=EUR"
+
 
 
 def money_values(text: str) -> list[float]:
@@ -211,6 +197,59 @@ def make_observation(
     }
 
 
+async def scan_pair(
+    page: Page,
+    *,
+    origin: str,
+    destination: str,
+    departure: dt.date,
+    return_date: dt.date,
+    timeout_ms: int,
+) -> dict[str, Any]:
+    query_url = flight_search_url(origin, destination, departure, return_date)
+    try:
+        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        await page.goto(query_url, timeout=timeout_ms)
+    # This is a first-run cookie-consent screen for the dedicated profile.
+    # Choose the privacy-preserving option and let Google remember it there.
+    try:
+        reject_btn = page.get_by_role("button", name="Reject all", exact=True)
+        if await reject_btn.is_visible(timeout=min(timeout_ms, 3_000)):
+            await reject_btn.click()
+            await page.wait_for_timeout(500)
+            await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        pass
+    page_text = await wait_for_results(page, timeout_ms)
+
+    # If results are still loading or showed a temporary glitch, give a brief retry
+    if page_status(page_text) == "incomplete":
+        try:
+            reload_btn = page.get_by_role("button", name="Reload", exact=True)
+            if await reload_btn.count() > 0 and await reload_btn.first.is_visible():
+                await reload_btn.click(timeout=2000)
+            else:
+                await page.wait_for_timeout(3000)
+        except Exception:
+            await page.wait_for_timeout(2000)
+        page_text = await wait_for_results(page, timeout_ms)
+
+    candidates = await visible_candidate_blocks(page)
+    observation = make_observation(
+        origin=origin,
+        destination=destination,
+        departure=departure,
+        return_date=return_date,
+        page_text=page_text,
+        candidates=candidates,
+    )
+    if observation["status"] != "observed":
+        observation["page_url"] = page.url
+        observation["visible_page_text"] = page_text[:2000]
+    return observation
+
+
 def failed_observation(
     *, origin: str, destination: str, departure: dt.date, return_date: dt.date, error: Exception
 ) -> dict[str, Any]:
@@ -241,24 +280,16 @@ def save_observation(results_dir: Path, observation: dict[str, Any]) -> Path:
     return path
 
 
-def write_daily_report(results_dir: Path, observations: list[dict[str, Any]], reference_price: float | None) -> tuple[Path, Path]:
+def write_daily_report(results_dir: Path, observations: list[dict[str, Any]], reference_price: float | None = None) -> tuple[Path, Path]:
     """Write compact report files that are safe to open after each daily run."""
     results_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
     rows = sorted(observations, key=lambda item: (item["departure_date"], item["return_date"]))
-    reference = next(
-        (item for item in rows if item["departure_date"] == "2026-12-09" and item["return_date"] == "2027-01-09"),
-        None,
-    )
     report = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source": "Google Flights UI",
-        "reference_price_eur": reference_price,
-        "reference_pair": reference,
-        "reference_matches_expected_price": (
-            reference is not None and reference.get("lowest_observed_price_eur") == reference_price
-            if reference_price is not None else None
-        ),
+        "total_pairs_scanned": len(rows),
+        "observed_pairs": sum(1 for r in rows if r.get("status") == "observed"),
         "observations": rows,
     }
     json_path = results_dir / f"daily_fare_report_{stamp}.json"
@@ -366,19 +397,6 @@ async def run(args: argparse.Namespace) -> int:
         finally:
             await context.close()
 
-    if args.reference_price is not None and args.reference_price > 0:
-        reference = next(
-            (item for item in observations if item["departure_date"] == "2026-12-09" and item["return_date"] == "2027-01-09"),
-            None,
-        )
-        if reference is not None:
-            if reference.get("lowest_observed_price_eur") == args.reference_price:
-                print(f"[Google Flights] Reference match: observed expected €{args.reference_price:.0f}")
-            else:
-                print(
-                    f"[Google Flights] Reference notice: expected €{args.reference_price:.0f}, observed €{reference.get('lowest_observed_price_eur')}.",
-                    file=sys.stderr,
-                )
     print(f"[Google Flights] Daily report written: {report_json.name}, {report_csv.name}")
     return 0
 

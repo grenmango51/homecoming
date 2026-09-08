@@ -57,8 +57,12 @@ def load_daily_csv(report_path: Path) -> dict[tuple[str, str], dict[str, Any]]:
     return records
 
 
-def load_pair_jsons(directory: Path) -> dict[tuple[str, str], dict[str, Any]]:
-    """Load individual pair JSON files (e.g. YYYY-MM-DD_YYYY-MM-DD.json) from a directory."""
+def load_pair_jsons(
+    directory: Path,
+    origin: str | None = None,
+    dest: str | None = None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Load individual pair JSON files from a directory, optionally filtered by route."""
     records: dict[tuple[str, str], dict[str, Any]] = {}
     if not directory.is_dir():
         return records
@@ -66,6 +70,10 @@ def load_pair_jsons(directory: Path) -> dict[tuple[str, str], dict[str, Any]]:
     for p in directory.glob("????-??-??_????-??-??.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            if origin and data.get("origin") and data.get("origin").upper() != origin.upper():
+                continue
+            if dest and data.get("destination") and data.get("destination").upper() != dest.upper():
+                continue
             dep = data.get("departure_date")
             ret = data.get("return_date")
             if dep and ret:
@@ -195,9 +203,6 @@ def render_table(comparisons: list[dict[str, Any]]) -> str:
         else:
             diff_str = "-"
 
-        is_ref = (dep == "2026-12-09" and ret == "2027-01-09")
-        marker = " *" if is_ref else "  "
-
         row_str = "| " + " | ".join([
             dep.ljust(widths[0]),
             ret.ljust(widths[1]),
@@ -205,7 +210,7 @@ def render_table(comparisons: list[dict[str, Any]]) -> str:
             g_str.rjust(widths[3]),
             s_str.rjust(widths[4]),
             c_str.rjust(widths[5]),
-            (winner + marker).ljust(widths[6]),
+            winner.ljust(widths[6]),
             diff_str.rjust(widths[7]),
         ]) + " |"
         lines.append(row_str)
@@ -258,10 +263,6 @@ def write_comparison_reports(
             }
             for c in overall_cheapest_pairs
         ],
-        "reference_pair_2026_12_09_2027_01_09": next(
-            (c for c in comparisons if c["departure_date"] == "2026-12-09" and c["return_date"] == "2027-01-09"),
-            None,
-        ),
         "comparisons": comparisons,
     }
 
@@ -298,6 +299,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skyscanner-dir", default=str(cfg.skyscanner.resolved_results_dir()), help="Path to Skyscanner results")
     parser.add_argument("--google-report", help="Path to specific Google Flights daily CSV report")
     parser.add_argument("--skyscanner-report", help="Path to specific Skyscanner daily CSV report")
+    parser.add_argument("--origin", default=cfg.trip.origin, help="Filter by origin airport code")
+    parser.add_argument("--dest", default=cfg.trip.dest, help="Filter by destination airport code")
     parser.add_argument("--output-dir", default=str(cfg.comparison.resolved_output_dir()), help="Output directory for comparison reports")
     return parser.parse_args()
 
@@ -312,23 +315,25 @@ def main() -> None:
     skyscanner_dir = Path(args.skyscanner_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
 
-    google_records = load_pair_jsons(google_dir)
-    google_csv = Path(args.google_report) if args.google_report else find_latest_report(google_dir, "daily_fare_report")
-    if google_csv and google_csv.is_file():
-        print(f"Reading Google Flights CSV report: {google_csv.name}")
-        csv_records = load_daily_csv(google_csv)
-        for k, v in csv_records.items():
-            if k not in google_records or google_records[k]["price_eur"] is None:
-                google_records[k] = v
+    google_records = load_pair_jsons(google_dir, origin=args.origin, dest=args.dest)
+    if args.google_report:
+        google_csv = Path(args.google_report)
+        if google_csv.is_file():
+            print(f"Reading Google Flights CSV report: {google_csv.name}")
+            csv_records = load_daily_csv(google_csv)
+            for k, v in csv_records.items():
+                if k not in google_records or google_records[k]["price_eur"] is None:
+                    google_records[k] = v
 
-    skyscanner_records = load_pair_jsons(skyscanner_dir)
-    skyscanner_csv = Path(args.skyscanner_report) if args.skyscanner_report else find_latest_report(skyscanner_dir, "daily_fare_report_skyscanner")
-    if skyscanner_csv and skyscanner_csv.is_file():
-        print(f"Reading Skyscanner CSV report: {skyscanner_csv.name}")
-        csv_records = load_daily_csv(skyscanner_csv)
-        for k, v in csv_records.items():
-            if k not in skyscanner_records or skyscanner_records[k]["price_eur"] is None:
-                skyscanner_records[k] = v
+    skyscanner_records = load_pair_jsons(skyscanner_dir, origin=args.origin, dest=args.dest)
+    if args.skyscanner_report:
+        skyscanner_csv = Path(args.skyscanner_report)
+        if skyscanner_csv.is_file():
+            print(f"Reading Skyscanner CSV report: {skyscanner_csv.name}")
+            csv_records = load_daily_csv(skyscanner_csv)
+            for k, v in csv_records.items():
+                if k not in skyscanner_records or skyscanner_records[k]["price_eur"] is None:
+                    skyscanner_records[k] = v
 
     print(f"Loaded {len(google_records)} Google Flights records, {len(skyscanner_records)} Skyscanner records.")
 
@@ -344,19 +349,15 @@ def main() -> None:
     print(f"  CSV:  {csv_out.name}")
     print(f"  JSON: {json_out.name}")
 
-    ref = next((c for c in comparisons if c["departure_date"] == "2026-12-09" and c["return_date"] == "2027-01-09"), None)
-    if ref:
+    valid_fares = [c for c in comparisons if c["cheapest_price_eur"] is not None]
+    if valid_fares:
+        best = min(valid_fares, key=lambda c: c["cheapest_price_eur"])
         print("\n" + "=" * 60)
-        print("REFERENCE PAIR HIGHLIGHT (2026-12-09 -> 2027-01-09):")
-        print(f"  Google Flights: €{ref['google_price_eur'] if ref['google_price_eur'] is not None else 'N/A'}")
-        print(f"  Skyscanner:     €{ref['skyscanner_price_eur'] if ref['skyscanner_price_eur'] is not None else 'N/A'}")
-        if ref['google_price_eur'] and ref['skyscanner_price_eur']:
-            if ref['winner'] == "Skyscanner":
-                print(f"  WINNER: Skyscanner by €{ref['savings_eur']:.0f} ({ref['savings_pct']}%) cheaper!")
-            elif ref['winner'] == "Google Flights":
-                print(f"  WINNER: Google Flights by €{ref['savings_eur']:.0f} ({ref['savings_pct']}%) cheaper!")
-            else:
-                print("  WINNER: Tie!")
+        print(f"BEST FARE FOUND ({best['departure_date']} -> {best['return_date']}, {best['stay_nights']} nights):")
+        print(f"  Cheapest Platform: {best['winner']}")
+        print(f"  Lowest Price:      €{best['cheapest_price_eur']:.0f}")
+        if best.get("savings_eur"):
+            print(f"  Savings:           €{best['savings_eur']:.0f} ({best['savings_pct']}%) vs alternative")
         print("=" * 60)
 
 

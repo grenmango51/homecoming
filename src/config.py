@@ -71,7 +71,7 @@ class GoogleFlightsConfig:
     enabled: bool = True
     delay_seconds: int = 3
     timeout_seconds: int = 30
-    reference_price: float | None = 800.0
+    reference_price: float | None = None
     profile_dir: str = ".browser-profile"
     results_dir: str = "flight_results"
 
@@ -88,7 +88,7 @@ class SkyscannerConfig:
     delay_seconds: int = 4
     timeout_seconds: int = 35
     challenge_timeout_seconds: int = 90
-    reference_price: float | None = 782.0
+    reference_price: float | None = None
     profile_dir: str = ".skyscanner-profile"
     results_dir: str = "flight_results_skyscanner"
 
@@ -136,8 +136,8 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
     if not browser_exec:
         browser_exec = None
 
-    gf_ref = parse_optional_price(gf_data["reference_price"]) if "reference_price" in gf_data else 800.0
-    ss_ref = parse_optional_price(ss_data["reference_price"]) if "reference_price" in ss_data else 782.0
+    gf_ref = parse_optional_price(gf_data.get("reference_price"))
+    ss_ref = parse_optional_price(ss_data.get("reference_price"))
 
     return AppConfig(
         trip=TripConfig(

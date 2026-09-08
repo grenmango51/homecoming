@@ -123,7 +123,7 @@ class FlightComparisonTests(unittest.TestCase):
         self.assertIn("2027-01-09", table)
         self.assertIn("€800", table)
         self.assertIn("€782", table)
-        self.assertIn("Skyscanner *", table)
+        self.assertIn("Skyscanner", table)
         self.assertIn("-€18 (SS)", table)
 
     def test_write_comparison_reports(self) -> None:

@@ -123,10 +123,11 @@ class SkyscannerScannerTests(unittest.TestCase):
             "fetched_at": "2026-09-07T00:00:00+00:00",
         }
         with tempfile.TemporaryDirectory() as td:
-            j_path, c_path = skyscanner.write_daily_report(Path(td), [obs], reference_price=782.0)
+            j_path, c_path = skyscanner.write_daily_report(Path(td), [obs])
             data = json.loads(j_path.read_text(encoding="utf-8"))
-            self.assertTrue(data["reference_matches_expected_price"])
-            self.assertEqual(data["reference_price_eur"], 782.0)
+            self.assertEqual(data["total_pairs_scanned"], 1)
+            self.assertEqual(data["observed_pairs"], 1)
+            self.assertEqual(len(data["observations"]), 1)
             self.assertEqual(len(c_path.read_text(encoding="utf-8").splitlines()), 2)
 
 

@@ -322,26 +322,16 @@ def save_observation(results_dir: Path, observation: dict[str, Any]) -> Path:
 def write_daily_report(
     results_dir: Path,
     observations: list[dict[str, Any]],
-    reference_price: float | None = 782.0,
+    reference_price: float | None = None,
 ) -> tuple[Path, Path]:
     """Write standardized daily summary CSV and JSON reports."""
     results_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
     rows = sorted(observations, key=lambda item: (item["departure_date"], item["return_date"]))
-    reference = next(
-        (item for item in rows if item["departure_date"] == "2026-12-09" and item["return_date"] == "2027-01-09"),
-        None,
-    )
 
     report = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source": "Skyscanner UI",
-        "reference_price_eur": reference_price,
-        "reference_pair": reference,
-        "reference_matches_expected_price": (
-            reference is not None and reference.get("lowest_observed_price_eur") == reference_price
-            if reference_price is not None else None
-        ),
         "total_pairs_scanned": len(rows),
         "observed_pairs": sum(1 for r in rows if r.get("status") == "observed"),
         "observations": rows,
@@ -549,7 +539,12 @@ async def run(args: argparse.Namespace) -> int:
                 if args.skip_existing and pair_file.exists():
                     try:
                         cached = json.loads(pair_file.read_text(encoding="utf-8"))
-                        if cached.get("status") == "observed" and cached.get("fetched_at", "").startswith(today_stamp):
+                        if (
+                            cached.get("status") == "observed"
+                            and cached.get("fetched_at", "").startswith(today_stamp)
+                            and cached.get("origin") == args.origin
+                            and cached.get("destination") == args.dest
+                        ):
                             print(
                                 f"[Skyscanner] [{index}/{len(pairs)}] {departure} -> {return_date} "
                                 f"(cached today: €{cached.get('lowest_observed_price_eur')})"
@@ -597,20 +592,6 @@ async def run(args: argparse.Namespace) -> int:
 
         finally:
             await context.close()
-
-    if args.reference_price is not None and args.reference_price > 0:
-        reference = next(
-            (item for item in observations if item["departure_date"] == "2026-12-09" and item["return_date"] == "2027-01-09"),
-            None,
-        )
-        if reference is not None:
-            if reference.get("lowest_observed_price_eur") == args.reference_price:
-                print(f"\n[Skyscanner] SUCCESS: Verified reference pair 2026-12-09 -> 2027-01-09 matches expected cheapest €{args.reference_price:.0f}!")
-            else:
-                print(
-                    f"\n[Skyscanner] Reference alert: expected €{args.reference_price:.0f}, observed €{reference.get('lowest_observed_price_eur')}.",
-                    file=sys.stderr,
-                )
 
     print(f"\n[Skyscanner] Daily Skyscanner report written: {report_json.name}, {report_csv.name}")
     return 0

@@ -99,17 +99,13 @@ Skyscanner can be run for **any airport codes and dates** directly using command
 
 > **Currency / Locale Note**: By default, Skyscanner cookies request the European market in EUR (`market:::FI&currency:::EUR`). To track prices in USD (`USD`), GBP (`GBP`), etc., edit the cookie strings in `find_flights_skyscanner.py`.
 
-### B. Google Flights (`find_flights.py`) — *Route Note*
-- **Current Route**: Google Flights uses a base64-encoded protobuf query string (`TFS_TEMPLATE`) that is calibrated for **Helsinki (HEL) to Hanoi (HAN)**.
-- **Custom Dates for HEL $\rightarrow$ HAN**: You can change the dates freely:
-  ```powershell
-  .\.venv\Scripts\python.exe find_flights.py --depart-from 2026-12-09 --depart-to 2026-12-11 --return-from 2027-01-05 --return-to 2027-01-07
-  ```
-- **Searching a Different Route on Google Flights**:
-  If you want to use Google Flights for a different route (e.g., LHR to JFK):
-  1. Open [Google Flights](https://www.google.com/travel/flights) in your browser and perform a search for your route.
-  2. Copy the `tfs=...` query parameter from the resulting URL.
-  3. Update `TFS_TEMPLATE` in `find_flights.py` with your route's query string.
+### B. Google Flights (`find_flights.py`) — *Custom Routes Ready*
+Google Flights now automatically generates direct query URLs for any airport codes and dates:
+
+```powershell
+# Scan any route on Google Flights:
+.\.venv\Scripts\python.exe find_flights.py --origin PHL --dest HAN --depart-from 2026-12-13 --depart-to 2026-12-16 --return-from 2027-01-09 --return-to 2027-01-10
+```
 
 ---
 
