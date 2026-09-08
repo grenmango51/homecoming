@@ -43,6 +43,43 @@ class FlightReportTests(unittest.TestCase):
             self.assertTrue(report["reference_matches_expected_price"])
             self.assertEqual(len(csv_path.read_text(encoding="utf-8").splitlines()), 2)
 
+    def test_duration_minutes_parses_various_formats(self) -> None:
+        self.assertEqual(flights.duration_minutes("16 hr 15 min"), 975)
+        self.assertEqual(flights.duration_minutes("19 hr"), 1140)
+        self.assertEqual(flights.duration_minutes("2h 30m"), 150)
+        self.assertEqual(flights.duration_minutes("15h"), 900)
+        self.assertIsNone(flights.duration_minutes("no duration"))
+
+    def test_cheapest_banner_price_parsing(self) -> None:
+        self.assertEqual(flights.cheapest_banner_price("Cheapest from €1,064"), 1064.0)
+        self.assertEqual(flights.cheapest_banner_price("Cheapest from €800"), 800.0)
+        self.assertEqual(flights.cheapest_banner_price("cheapest eur 950"), 950.0)
+        self.assertIsNone(flights.cheapest_banner_price("No flights available"))
+
+    def test_page_status_classification(self) -> None:
+        self.assertEqual(flights.page_status("6 results returned. Top departing flights"), "observed")
+        self.assertEqual(flights.page_status("Cheapest from €1,064"), "observed")
+        self.assertEqual(flights.page_status("Please verify you are human captcha"), "blocked")
+        self.assertEqual(flights.page_status("Oops, something went wrong"), "incomplete")
+        self.assertEqual(flights.page_status("random empty content"), "incomplete")
+
+    def test_make_observation_uses_candidates_and_banner_without_footer_bleed(self) -> None:
+        obs = flights.make_observation(
+            origin="HEL",
+            destination="HAN",
+            departure=flights.dt.date(2026, 12, 9),
+            return_date=flights.dt.date(2027, 1, 9),
+            page_text="6 results returned. Cheapest from €1,064. Footer terms €118 fee.",
+            candidates=[
+                "Qatar Airways 16 hr 15 min €1,064 round trip",
+                "Emirates 15 hr 55 min €1,165 round trip",
+            ],
+        )
+        self.assertEqual(obs["status"], "observed")
+        self.assertEqual(obs["lowest_observed_price_eur"], 1064.0)
+        self.assertEqual(len(obs["candidate_cards"]), 2)
+        self.assertEqual(obs["candidate_cards"][0]["observed_duration_minutes"], 975)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,11 +39,14 @@ GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 TFS_TEMPLATE = (
     "CBwQAhooEgoyMDI2LTEyLTA5agwIAhIIL20vMDNraG5yDAgDEggvbS8wZm5mZhoo"
     "EgoyMDI3LTAxLTA5agwIAxIIL20vMGZuZmYrDAgCEggvbS8wM2tobkABSAFwAYIBCwj"
+    "EgoyMDI3LTAxLTA5agwIAxIIL20vMGZuZmZyDAgCEggvbS8wM2tobkABSAFwAYIBCwj"
     "___________8BmAEB"
 )
 PRICE_RE = re.compile(r"(?:€\s*|EUR\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
 EUROS_RE = re.compile(r"\b([0-9][0-9.,\s]*)\s+euros?\b", re.IGNORECASE)
 DURATION_RE = re.compile(r"\b(\d{1,2})h(?:\s*(\d{1,2})m)?\b", re.IGNORECASE)
+DURATION_RE = re.compile(r"\b(\d{1,2})\s*(?:h|hr|hours?)\s*(?:(\d{1,2})\s*(?:m|min|minutes?))?\b", re.IGNORECASE)
+CHEAPEST_BANNER_RE = re.compile(r"cheapest\s+(?:from\s+)?(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
 
 
 def date_range(start: str, end: str) -> list[dt.date]:
@@ -98,6 +101,7 @@ def flight_search_url(origin: str, destination: str, departure: dt.date, return_
     raw = raw.replace(b"2027-01-09", return_date.isoformat().encode(), 1)
     encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
     return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&tfu=EgYIABAAGAA&hl=en&curr=EUR"
+    return f"{GOOGLE_FLIGHTS}/search?tfs={encoded}&tfu=EgYIACACKAEiAA&hl=en&curr=EUR"
 
 
 def money_values(text: str) -> list[float]:
@@ -117,6 +121,21 @@ def duration_minutes(value: str) -> int | None:
     if not match:
         return None
     return int(match.group(1)) * 60 + int(match.group(2) or 0)
+    hours = int(match.group(1))
+    minutes = int(match.group(2) or 0)
+    return hours * 60 + minutes
+
+
+def cheapest_banner_price(text: str) -> float | None:
+    match = CHEAPEST_BANNER_RE.search(text)
+    if not match:
+        return None
+    raw = match.group(1).replace(" ", "").replace("\u00a0", "")
+    normalized = raw.replace(",", "") if raw.count(",") <= 1 else raw.replace(".", "").replace(",", ".")
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
 
 
 def protection_label(text: str) -> str:
@@ -127,17 +146,24 @@ def protection_label(text: str) -> str:
 
 async def visible_candidate_blocks(page: Page) -> list[str]:
     """Return flight-card text, without relying on generated Google CSS classes."""
-    blocks = await page.locator("a, [role='link']").all_inner_texts()
+    locators = page.locator("li[role='listitem'], [role='listitem'], li.pIav2d")
+    count = await locators.count()
     candidates: list[str] = []
     seen: set[str] = set()
-    for block in blocks:
-        compact = " ".join(block.split())
-        if len(compact) < 20 or "round trip total" not in compact.lower():
+    for i in range(count):
+        txt = await locators.nth(i).inner_text()
+        compact = " ".join(txt.split())
+        if len(compact) < 25:
             continue
-        key = compact.lower()
-        if key not in seen:
-            seen.add(key)
-            candidates.append(compact[:4000])
+        lowered = compact.lower()
+        if ("round trip" in lowered or "one way" in lowered) and ("stop" in lowered or "nonstop" in lowered):
+            prices = money_values(compact)
+            if not prices:
+                continue
+            key = compact[:120].lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(compact[:4000])
     return candidates[:40]
 
 
@@ -147,12 +173,19 @@ async def wait_for_results(page: Page, timeout_ms: int) -> str:
         await page.wait_for_function(
             """() => {
                 const text = document.body?.innerText || '';
-                return /results returned|top departing flights|no flights|unusual traffic|captcha/i.test(text);
+                if (/unusual traffic|captcha|verify you are human/i.test(text)) {
+                    return true;
+                }
+                const hasResults = /\\b\\d+\\s+results returned\\b|top departing flights|cheapest from|no flights/i.test(text);
+                const isLoading = /loading results/i.test(text);
+                return hasResults && !isLoading;
             }""",
             timeout=timeout_ms,
         )
     except Exception:
         pass
+    # Brief stabilization pause for flight cards to finish rendering
+    await page.wait_for_timeout(1000)
     return await page.locator("body").inner_text()
 
 
@@ -162,7 +195,9 @@ def page_status(text: str) -> str:
         return "blocked"
     if "sign in" in lowered and len(text) < 1000:
         return "user_action_required"
-    if not re.search(r"\b\d+ results returned\b|top departing flights|no flights", lowered):
+    if "oops, something went wrong" in lowered:
+        return "incomplete"
+    if not re.search(r"\b\d+ results returned\b|top departing flights|no flights|cheapest from", lowered):
         return "incomplete"
     return "observed"
 
@@ -170,10 +205,25 @@ def page_status(text: str) -> str:
 def make_observation(
     *, origin: str, destination: str, departure: dt.date, return_date: dt.date, page_text: str, candidates: list[str]
 ) -> dict[str, Any]:
-    # The page-level cheapest-tab price can be lower than a currently visible
-    # card, so retain it as well as the individual cards.
-    all_text = page_text + "\n" + "\n".join(candidates)
-    prices = money_values(all_text)
+    status = page_status(page_text)
+    candidate_prices: list[float] = []
+    for block in candidates:
+        candidate_prices.extend(money_values(block))
+
+    banner = cheapest_banner_price(page_text)
+    if candidate_prices and banner is not None:
+        lowest_price: float | None = min(min(candidate_prices), banner)
+    elif candidate_prices:
+        lowest_price = min(candidate_prices)
+    elif banner is not None:
+        lowest_price = banner
+    elif status == "observed":
+        all_prices = money_values(page_text)
+        lowest_price = min(all_prices) if all_prices else None
+    else:
+        lowest_price = None
+
+    all_card_text = "\n".join(candidates)
     return {
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source": "Google Flights UI",
@@ -182,9 +232,9 @@ def make_observation(
         "departure_date": departure.isoformat(),
         "return_date": return_date.isoformat(),
         "stay_nights": (return_date - departure).days,
-        "status": page_status(page_text),
-        "lowest_observed_price_eur": min(prices) if prices else None,
-        "protection_label": protection_label(all_text),
+        "status": status,
+        "lowest_observed_price_eur": lowest_price,
+        "protection_label": protection_label(all_card_text or page_text),
         "seller_confirmation_required": True,
         "candidate_cards": [
             {
@@ -258,12 +308,37 @@ async def scan_pair(
     # This is a first-run cookie-consent screen for the dedicated profile.
     # Choose the privacy-preserving option and let Google remember it there.
     try:
-        await page.get_by_role("button", name="Reject all", exact=True).click(timeout=min(timeout_ms, 5_000))
-        await page.wait_for_timeout(500)
-        await page.goto(query_url, wait_until="domcontentloaded")
+        reject_btn = page.get_by_role("button", name="Reject all", exact=True)
+        if await reject_btn.is_visible(timeout=min(timeout_ms, 3_000)):
+            await reject_btn.click()
+            await page.wait_for_timeout(500)
+            await page.goto(query_url, wait_until="domcontentloaded")
     except Exception:
         pass
     page_text = await wait_for_results(page, timeout_ms)
+
+    # If results are still loading or showed a temporary glitch, give a brief retry
+    if page_status(page_text) == "incomplete":
+        try:
+            reload_btn = page.get_by_role("button", name="Reload", exact=True)
+            if await reload_btn.count() > 0 and await reload_btn.first.is_visible():
+                await reload_btn.first.click(timeout=2000)
+            else:
+                await page.wait_for_timeout(3000)
+        except Exception:
+            await page.wait_for_timeout(2000)
+        page_text = await wait_for_results(page, timeout_ms)
+
+    # Click "View more flights" if present to discover all options
+    try:
+        more_btn = page.get_by_text("View more flights", exact=False)
+        if await more_btn.count() > 0 and await more_btn.first.is_visible():
+            await more_btn.first.click(timeout=2000)
+            await page.wait_for_timeout(1500)
+            page_text = await page.locator("body").inner_text()
+    except Exception:
+        pass
+
     candidates = await visible_candidate_blocks(page)
     observation = make_observation(
         origin=origin,
@@ -390,7 +465,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--return-from", default="2027-01-05")
     result.add_argument("--return-to", default="2027-01-09")
     result.add_argument("--min-stay-nights", type=int, default=21)
-    result.add_argument("--delay-seconds", type=int, default=12, help="Delay between pages; keep this modest and human-supervised.")
+    result.add_argument("--delay-seconds", type=int, default=8, help="Delay between pages; keep this modest and human-supervised.")
     result.add_argument("--timeout-seconds", type=int, default=30)
     result.add_argument("--profile-dir", default=str(DEFAULT_PROFILE_DIR))
     result.add_argument("--results-dir", default=str(DEFAULT_RESULTS_DIR))
@@ -404,7 +479,7 @@ def main() -> None:
     # symbols such as € and must never abort a scan merely while logging.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
     args = parser().parse_args()
     try:
         raise SystemExit(asyncio.run(run(args)))
