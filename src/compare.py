@@ -292,9 +292,16 @@ def write_comparison_reports(
     return csv_path, json_path
 
 
-def parse_args() -> argparse.Namespace:
-    cfg = load_config()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    pre_p = argparse.ArgumentParser(add_help=False)
+    pre_p.add_argument("--config", help="Optional path to config.toml")
+    pre_p.add_argument("--trip", help="Optional path or name of trip config file")
+    pre_args, _ = pre_p.parse_known_args(argv)
+
+    cfg = load_config(pre_args.config, pre_args.trip)
     parser = argparse.ArgumentParser(description="Compare Google Flights and Skyscanner fares.")
+    parser.add_argument("--config", default=pre_args.config, help="Optional path to config.toml")
+    parser.add_argument("--trip", default=pre_args.trip, help="Optional path or name of trip config file")
     parser.add_argument("--google-dir", default=str(cfg.google_flights.resolved_results_dir()), help="Path to Google Flights results")
     parser.add_argument("--skyscanner-dir", default=str(cfg.skyscanner.resolved_results_dir()), help="Path to Skyscanner results")
     parser.add_argument("--google-report", help="Path to specific Google Flights daily CSV report")
@@ -302,15 +309,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--origin", default=cfg.trip.origin, help="Filter by origin airport code")
     parser.add_argument("--dest", default=cfg.trip.dest, help="Filter by destination airport code")
     parser.add_argument("--output-dir", default=str(cfg.comparison.resolved_output_dir()), help="Output directory for comparison reports")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
 
-    args = parse_args()
+    args = parse_args(argv)
     google_dir = Path(args.google_dir).resolve()
     skyscanner_dir = Path(args.skyscanner_dir).resolve()
     output_dir = Path(args.output_dir).resolve()

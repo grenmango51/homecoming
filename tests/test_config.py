@@ -100,5 +100,50 @@ reference_price = 0.0
                 temp_path.unlink()
 
 
+    def test_modular_hel_han_config(self) -> None:
+        cfg = load_config()
+        self.assertEqual(cfg.trip.origin, "HEL")
+        self.assertEqual(cfg.trip.dest, "HAN")
+        self.assertEqual(cfg.trip.min_stay_nights, 21)
+        self.assertEqual(cfg.trip.depart_from, "2026-12-09")
+        self.assertEqual(cfg.trip.depart_to, "2026-12-13")
+        self.assertEqual(cfg.trip.return_from, "2027-01-05")
+        self.assertEqual(cfg.trip.return_to, "2027-01-09")
+        self.assertEqual(cfg.trip.window_start, "2026-12-09")
+        self.assertEqual(cfg.trip.window_end, "2027-01-09")
+        self.assertEqual(cfg.trip_file, "HEL_HAN.toml")
+
+    def test_modular_phl_han_config(self) -> None:
+        cfg = load_config(trip_path="PHL_HAN.toml")
+        self.assertEqual(cfg.trip.origin, "PHL")
+        self.assertEqual(cfg.trip.dest, "HAN")
+        self.assertEqual(cfg.trip.min_stay_nights, 18)
+        self.assertEqual(cfg.trip.depart_from, "2026-12-13")
+        self.assertEqual(cfg.trip.depart_to, "2026-12-16")
+        self.assertEqual(cfg.trip.return_from, "2027-01-09")
+        self.assertEqual(cfg.trip.return_to, "2027-01-10")
+        self.assertEqual(cfg.trip_file, "PHL_HAN.toml")
+
+    def test_modular_trip_file_in_custom_config(self) -> None:
+        custom_content = """
+trip_file = "PHL_HAN.toml"
+
+[execution]
+strategy = "parallel"
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False, encoding="utf-8") as f:
+            f.write(custom_content)
+            temp_path = Path(f.name)
+
+        try:
+            cfg = load_config(temp_path)
+            self.assertEqual(cfg.trip.origin, "PHL")
+            self.assertEqual(cfg.trip.dest, "HAN")
+            self.assertEqual(cfg.trip.min_stay_nights, 18)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()

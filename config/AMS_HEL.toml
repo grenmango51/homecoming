@@ -1,0 +1,16 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Amsterdam / Netherlands (AMS) -> Helsinki (HEL) [ONE-WAY]
+# ==============================================================================
+
+[trip]
+origin = "AMS"
+dest = "HEL"
+trip_type = "one-way"
+date_mode = "range"
+
+# 1 January to 5 January 2027
+depart_from = "2027-01-01"
+depart_to = "2027-01-05"
+return_from = ""
+return_to = ""
+min_stay_nights = 0

@@ -14,6 +14,7 @@ import csv
 import datetime as dt
 import json
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -160,12 +161,19 @@ def parse_itinerary_json(itinerary: dict[str, Any]) -> dict[str, Any] | None:
 
         deal_options = itinerary.get("pricingOptions", [])
         deals = []
-        for opt in deal_options[:5]:
+        for opt in deal_options:
             agent = opt.get("agentName")
             if not agent and opt.get("agents"):
                 agent = opt["agents"][0].get("name")
             opt_price = opt.get("price", {}).get("raw")
-            if agent:
+            if opt_price is not None:
+                try:
+                    val = float(opt_price)
+                    if price_eur is None or val < price_eur:
+                        price_eur = val
+                except (ValueError, TypeError):
+                    pass
+            if agent and len(deals) < 5:
                 deals.append({"seller": agent, "price_eur": opt_price})
 
         return {
@@ -377,6 +385,7 @@ async def scan_pair(
     departure: dt.date,
     return_date: dt.date,
     timeout_ms: int,
+    poll_wait_seconds: int = 30,
     challenge_timeout_seconds: int = 90,
 ) -> dict[str, Any]:
     """Navigate to Skyscanner, handle consent/challenges gracefully, and extract flight fares."""
@@ -449,9 +458,70 @@ async def scan_pair(
         except Exception:
             pass
 
-        # Brief stabilization delay
-        await page.wait_for_timeout(3500)
+        # Switch to "Cheapest" / "Halvin" tab early so the view prioritizes the lowest fares
+        try:
+            cheapest_tab = page.locator("button:has-text('Cheapest'), button:has-text('Halvin'), [data-testid='cheapest_tab'], [aria-label*='Halvin'], [aria-label*='Cheapest']")
+            if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
+                await cheapest_tab.first.click(timeout=1500)
+        except Exception:
+            pass
+
+        # Wait for Skyscanner's background polling to complete (up to poll_wait_seconds)
+        # to allow slower OTAs and budget carriers to return their fares.
+        if poll_wait_seconds > 0:
+            start_poll = asyncio.get_event_loop().time()
+            while (asyncio.get_event_loop().time() - start_poll) < poll_wait_seconds:
+                await page.wait_for_timeout(2000)
+                elapsed = asyncio.get_event_loop().time() - start_poll
+                progress_bar = page.locator("[role='progressbar'], [class*='ProgressBar'], [class*='loading-bar'], div[aria-label*='Loading']")
+                has_progress = await progress_bar.count() > 0 and await progress_bar.first.is_visible()
+                if not has_progress and elapsed >= 15:
+                    break
+
+        # Re-ensure "Cheapest" tab is active after all results loaded
+        try:
+            cheapest_tab = page.locator("button:has-text('Cheapest'), button:has-text('Halvin'), [data-testid='cheapest_tab'], [aria-label*='Halvin'], [aria-label*='Cheapest']")
+            if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
+                await cheapest_tab.first.click(timeout=1500)
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # Scroll down slightly to trigger hydration of DOM cards
+        try:
+            await page.evaluate("window.scrollBy(0, 600)")
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
         page_text = await page.locator("body").inner_text()
+
+        # Check for challenge / bot detection after polling as well
+        if is_challenge_page(page.url, page_text):
+            print(
+                "\n" + "!" * 70 + "\n"
+                "[ACTION REQUIRED] Skyscanner anti-bot challenge detected in the visible browser window!\n"
+                "Please press and hold the verification button in Chrome to continue.\n"
+                f"Waiting up to {challenge_timeout_seconds} seconds for verification...\n"
+                + "!" * 70,
+                flush=True,
+            )
+            elapsed = 0
+            while elapsed < challenge_timeout_seconds:
+                await page.wait_for_timeout(2000)
+                elapsed += 2
+                page_text = await page.locator("body").inner_text()
+                if not is_challenge_page(page.url, page_text):
+                    print(f"\n[RESOLVED] Challenge passed after {elapsed}s! Re-fetching results for {origin}->{destination}...", flush=True)
+                    try:
+                        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        await page.wait_for_timeout(4000)
+                    except Exception:
+                        pass
+                    page_text = await page.locator("body").inner_text()
+                    break
+            else:
+                print("\n[TIMEOUT] Challenge was not resolved within allotted time.", file=sys.stderr, flush=True)
 
         # Parse captured data
         xhr_results = extract_from_xhr_payloads(captured_payloads)
@@ -556,38 +626,82 @@ async def run(args: argparse.Namespace) -> int:
                         pass
 
                 print(f"[Skyscanner] [{index}/{len(pairs)}] {departure} -> {return_date}")
-                try:
-                    observation = await scan_pair(
-                        page,
-                        origin=args.origin,
-                        destination=args.dest,
-                        departure=departure,
-                        return_date=return_date,
-                        timeout_ms=args.timeout_seconds * 1000,
-                        challenge_timeout_seconds=args.challenge_timeout_seconds,
-                    )
-                except Exception as error:
-                    observation = failed_observation(
-                        origin=args.origin,
-                        destination=args.dest,
-                        departure=departure,
-                        return_date=return_date,
-                        error=error,
-                    )
+                max_retries = 2
+                attempt = 0
+                while attempt <= max_retries:
+                    attempt += 1
+                    try:
+                        observation = await scan_pair(
+                            page,
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=departure,
+                            return_date=return_date,
+                            timeout_ms=args.timeout_seconds * 1000,
+                            poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
+                            challenge_timeout_seconds=args.challenge_timeout_seconds,
+                        )
+                    except Exception as error:
+                        observation = failed_observation(
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=departure,
+                            return_date=return_date,
+                            error=error,
+                        )
+
+                    if observation["status"] not in {"blocked", "user_action_required"}:
+                        break
+
+                    if attempt <= max_retries:
+                        cooloff = 15 + attempt * 5
+                        print(
+                            f"[Skyscanner] Pair {departure} -> {return_date} flagged with {observation['status']}. "
+                            f"Cooling off for {cooloff}s and retrying attempt {attempt + 1}/{max_retries + 1}...",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        await page.wait_for_timeout(cooloff * 1000)
 
                 saved = save_observation(results_dir, observation)
                 observations.append(observation)
                 report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
                 print(f"  {observation['status']}; lowest observed: €{observation['lowest_observed_price_eur']}; saved {saved.name}")
 
-                if observation["status"] in {"blocked", "user_action_required"}:
-                    print(
-                        "[Skyscanner] Stopping: browser requires human verification. Please resolve and re-run.",
-                        file=sys.stderr,
-                    )
-                    return 2
-
                 if index < len(pairs):
+                    jitter = random.uniform(1.0, 4.0)
+                    pause_s = args.delay_seconds + jitter
+                    print(f"  [Politeness pause: {pause_s:.1f}s]")
+                    await page.wait_for_timeout(pause_s * 1000)
+
+            # Final sweep pass: retry any remaining flagged pairs once more
+            flagged = [obs for obs in observations if obs.get("status") in {"blocked", "user_action_required"}]
+            if flagged:
+                print(f"\n[Skyscanner] Starting final retry sweep for {len(flagged)} flagged pair(s)...", flush=True)
+                for sw_idx, fl in enumerate(flagged, 1):
+                    dep = dt.date.fromisoformat(fl["departure_date"])
+                    ret = dt.date.fromisoformat(fl["return_date"])
+                    print(f"[Skyscanner] [Sweep {sw_idx}/{len(flagged)}] Retrying {dep} -> {ret}...")
+                    try:
+                        sw_obs = await scan_pair(
+                            page,
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=dep,
+                            return_date=ret,
+                            timeout_ms=args.timeout_seconds * 1000,
+                            poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
+                            challenge_timeout_seconds=args.challenge_timeout_seconds,
+                        )
+                        if sw_obs["status"] not in {"blocked", "user_action_required"}:
+                            save_observation(results_dir, sw_obs)
+                            for i, obs_item in enumerate(observations):
+                                if obs_item.get("departure_date") == fl["departure_date"] and obs_item.get("return_date") == fl["return_date"]:
+                                    observations[i] = sw_obs
+                            report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
+                            print(f"  [Sweep Recovered!] {sw_obs['status']}; lowest observed: €{sw_obs['lowest_observed_price_eur']}")
+                    except Exception as sw_err:
+                        print(f"  [Sweep Failed]: {sw_err}", file=sys.stderr)
                     await page.wait_for_timeout(args.delay_seconds * 1000)
 
         finally:
@@ -597,10 +711,16 @@ async def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def parser() -> argparse.ArgumentParser:
-    cfg = load_config()
+def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
+    pre_p = argparse.ArgumentParser(add_help=False)
+    pre_p.add_argument("--config", help="Optional path to config.toml")
+    pre_p.add_argument("--trip", help="Optional path or name of trip config file")
+    pre_args, _ = pre_p.parse_known_args(argv)
+
+    cfg = load_config(pre_args.config, pre_args.trip)
     res = argparse.ArgumentParser(description="Human-supervised Skyscanner matrix scanner.")
-    res.add_argument("--config", help="Optional path to config.toml")
+    res.add_argument("--config", default=pre_args.config, help="Optional path to config.toml")
+    res.add_argument("--trip", default=pre_args.trip, help="Optional path or name of trip config file")
     res.add_argument("--origin", default=cfg.trip.origin)
     res.add_argument("--dest", default=cfg.trip.dest)
 
@@ -622,6 +742,7 @@ def parser() -> argparse.ArgumentParser:
     res.add_argument("--min-stay-nights", type=int, default=cfg.trip.min_stay_nights)
     res.add_argument("--delay-seconds", type=int, default=cfg.skyscanner.delay_seconds, help="Delay between searches in seconds")
     res.add_argument("--timeout-seconds", type=int, default=cfg.skyscanner.timeout_seconds, help="Page load timeout in seconds")
+    res.add_argument("--poll-wait-seconds", type=int, default=cfg.skyscanner.poll_wait_seconds, help="Wait time in seconds for Skyscanner provider polling")
     res.add_argument("--challenge-timeout-seconds", type=int, default=cfg.skyscanner.challenge_timeout_seconds, help="Wait time for human challenge solver")
     res.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=cfg.execution.skip_existing, help="Skip queries already observed today")
     res.add_argument("--profile-dir", default=str(cfg.skyscanner.resolved_profile_dir()))

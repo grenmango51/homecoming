@@ -36,12 +36,29 @@ from src.common import (
 )
 from src.config import load_config, PROJECT_ROOT
 
+import base64
+
 ROOT = PROJECT_ROOT
-DEFAULT_PROFILE_DIR = ROOT / ".browser-profile"
+DEFAULT_PROFILE_DIR = ROOT / ".browser-profile-daily"
 DEFAULT_RESULTS_DIR = ROOT / "flight_results"
 GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 
-CHEAPEST_BANNER_RE = re.compile(r"cheapest\s+(?:from\s+)?(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
+CHEAPEST_BANNER_RE = re.compile(
+    r"[Cc]heapest[^\n\r€\d]*(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE
+)
+
+USER_TFS_TEMPLATE = "CBwQAhojEgoyMDI2LTEyLTA5agwIAhIIL20vMDNraG5yBwgBEgNIQU4aIxIKMjAyNy0wMS0wNWoHCAESA0hBTnIMCAISCC9tLzAza2huQAFIAXABggELCP___________wGYAQE"
+
+
+def build_structured_flight_url(dep: dt.date, ret: dt.date, gl: str = "FI") -> str:
+    """Encode direct protobuf TFS URL that locks Google Flights to cheapest sort and Finnish POS."""
+    dep_bytes = dep.isoformat().encode()
+    ret_bytes = ret.isoformat().encode()
+    pad = "=" * (-len(USER_TFS_TEMPLATE) % 4)
+    raw = base64.urlsafe_b64decode(USER_TFS_TEMPLATE + pad)
+    raw_new = raw.replace(b"2026-12-09", dep_bytes).replace(b"2027-01-05", ret_bytes)
+    tfs = base64.urlsafe_b64encode(raw_new).decode().rstrip("=")
+    return f"https://www.google.com/travel/flights/search?tfs={tfs}&tfu=EgoIABAAGAAgAigB&hl=en&gl={gl}&curr=EUR"
 
 
 def date_accessible_name(value: dt.date) -> str:
@@ -49,13 +66,13 @@ def date_accessible_name(value: dt.date) -> str:
     return f"{value.strftime('%A, %B')} {value.day}, {value.year}"
 
 
-def flight_search_url(origin: str, destination: str, departure: dt.date, return_date: dt.date) -> str:
+def flight_search_url(origin: str, destination: str, departure: dt.date, return_date: dt.date, gl: str = "FI") -> str:
     """Build a direct Google Flights result URL for any route and date pair."""
     orig = origin.strip().upper()
     dest = destination.strip().upper()
-    return f"{GOOGLE_FLIGHTS}?q=Flights%20to%20{dest}%20from%20{orig}%20on%20{departure.isoformat()}%20through%20{return_date.isoformat()}&hl=en&curr=EUR"
-
-
+    if orig == "HEL" and dest == "HAN":
+        return build_structured_flight_url(departure, return_date, gl=gl)
+    return f"{GOOGLE_FLIGHTS}?q=Flights%20to%20{dest}%20from%20{orig}%20on%20{departure.isoformat()}%20through%20{return_date.isoformat()}&hl=en&gl={gl}&curr=EUR"
 
 
 def money_values(text: str) -> list[float]:
@@ -64,7 +81,9 @@ def money_values(text: str) -> list[float]:
         normalized = raw.replace(" ", "").replace("\u00a0", "")
         normalized = normalized.replace(",", "") if normalized.count(",") <= 1 else normalized.replace(".", "").replace(",", ".")
         try:
-            values.append(float(normalized))
+            val = float(normalized)
+            if val >= 50.0:
+                values.append(val)
         except ValueError:
             continue
     return values
@@ -77,9 +96,23 @@ def cheapest_banner_price(text: str) -> float | None:
     raw = match.group(1).replace(" ", "").replace("\u00a0", "")
     normalized = raw.replace(",", "") if raw.count(",") <= 1 else raw.replace(".", "").replace(",", ".")
     try:
-        return float(normalized)
+        val = float(normalized)
+        return val if val >= 50.0 else None
     except ValueError:
         return None
+
+
+KEY_AIRLINES = [
+    "Qatar Airways", "Emirates", "Turkish Airlines", "Finnair", "Etihad",
+    "Vietnam Airlines", "Air France", "KLM", "Lufthansa", "THAI", "Iberia",
+    "Condor", "Singapore Airlines", "British Airways", "China Southern", "Air China"
+]
+
+AIRPORT_RE = re.compile(r"\b([A-Z]{3})\b")
+KNOWN_AIRPORTS = {
+    "HEL", "HAN", "DOH", "DXB", "IST", "WAW", "AUH", "MUC", "BER", "ZRH",
+    "BKK", "CPH", "AMS", "CDG", "LHR", "FRA", "SIN", "VIE", "ARN", "OSL"
+}
 
 
 def protection_label(text: str) -> str:
@@ -88,27 +121,89 @@ def protection_label(text: str) -> str:
     return "not_flagged_by_google"
 
 
-async def visible_candidate_blocks(page: Page) -> list[str]:
-    """Return flight-card text, without relying on generated Google CSS classes."""
-    locators = page.locator("ul.Rk10dc > li, li[role='listitem'], [role='listitem'], li.pIav2d")
-    count = await locators.count()
-    candidates: list[str] = []
+def parse_card_details(raw_text: str, curr: str = "EUR") -> dict[str, Any]:
+    stops = 0
+    lower = raw_text.lower()
+    if "nonstop" in lower:
+        stops = 0
+    elif "1 stop" in lower:
+        stops = 1
+    elif "2 stops" in lower:
+        stops = 2
+    elif "3 stops" in lower:
+        stops = 3
+
+    found_airports = [
+        code for code in AIRPORT_RE.findall(raw_text)
+        if code in KNOWN_AIRPORTS and code not in {"HEL", "HAN"}
+    ]
+    layovers = list(dict.fromkeys(found_airports))
+    carriers = [carrier for carrier in KEY_AIRLINES if carrier.lower() in lower]
+    prices = money_values(raw_text)
+    dur_min = duration_minutes(raw_text)
+    protection = protection_label(raw_text)
+
+    return {
+        "text": raw_text,
+        "carriers": carriers,
+        "stops": stops,
+        "layovers": layovers,
+        "duration_minutes": dur_min,
+        "observed_prices": prices,
+        "observed_prices_eur": prices,
+        "lowest_price": min(prices) if prices else None,
+        "currency": curr,
+        "protection_label": protection,
+    }
+
+
+async def extract_clean_candidate_cards(page: Page, curr: str = "EUR") -> list[dict[str, Any]]:
+    """Return parsed flight cards directly without clicking 'more flights', which collapses Top Departing Flights."""
+    try:
+        await page.evaluate("window.scrollBy(0, 400)")
+        await page.wait_for_timeout(400)
+        await page.evaluate("window.scrollBy(0, 400)")
+        await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+    raw_texts: list[str] = []
+    try:
+        raw_texts = await page.evaluate(
+            """() => {
+                const els = document.querySelectorAll("ul.Rk10dc > li, li.pIav2d");
+                return Array.from(els).map(e => e.innerText || '');
+            }"""
+        )
+    except Exception:
+        try:
+            locators = page.locator("ul.Rk10dc > li, li.pIav2d")
+            raw_texts = await locators.all_inner_texts()
+        except Exception:
+            raw_texts = []
+
+    candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for i in range(count):
-        txt = await locators.nth(i).inner_text()
+    for txt in raw_texts:
         compact = " ".join(txt.split())
-        if len(compact) < 25:
+        if len(compact) < 20:
             continue
         lowered = compact.lower()
-        if ("round trip" in lowered or "one way" in lowered) and ("stop" in lowered or "nonstop" in lowered):
-            prices = money_values(compact)
-            if not prices:
+        if ("stop" in lowered or "nonstop" in lowered):
+            card = parse_card_details(compact, curr=curr)
+            if not card["observed_prices"]:
                 continue
-            key = compact[:120].lower()
+            key = compact[:80].lower()
             if key not in seen:
                 seen.add(key)
-                candidates.append(compact[:4000])
+                candidates.append(card)
     return candidates[:40]
+
+
+async def visible_candidate_blocks(page: Page) -> list[str]:
+    """Compatibility wrapper returning candidate raw text blocks."""
+    cards = await extract_clean_candidate_cards(page)
+    return [c["text"] for c in cards]
 
 
 async def wait_for_results(page: Page, timeout_ms: int) -> str:
@@ -120,8 +215,8 @@ async def wait_for_results(page: Page, timeout_ms: int) -> str:
                 if (/unusual traffic|captcha|verify you are human/i.test(text)) {
                     return true;
                 }
-                const hasResults = /\\b\\d+\\s+results returned\\b|top departing flights|cheapest from|no flights/i.test(text);
-                const isLoading = /loading results/i.test(text);
+                const hasResults = /\\b\\d+\\s+results returned\\b|departing flights|cheapest|no flights/i.test(text);
+                const isLoading = /loading results|fetching results/i.test(text);
                 return hasResults && !isLoading;
             }""",
             timeout=timeout_ms,
@@ -141,33 +236,58 @@ def page_status(text: str) -> str:
         return "user_action_required"
     if "oops, something went wrong" in lowered:
         return "incomplete"
-    if not re.search(r"\b\d+ results returned\b|top departing flights|no flights|cheapest from", lowered):
+    if not re.search(r"\b\d+ results returned\b|departing flights|no flights|cheapest", lowered):
         return "incomplete"
     return "observed"
 
 
 def make_observation(
-    *, origin: str, destination: str, departure: dt.date, return_date: dt.date, page_text: str, candidates: list[str]
+    *,
+    origin: str,
+    destination: str,
+    departure: dt.date,
+    return_date: dt.date,
+    page_text: str,
+    candidates: list[dict[str, Any]] | list[str],
 ) -> dict[str, Any]:
     status = page_status(page_text)
     candidate_prices: list[float] = []
-    for block in candidates:
-        candidate_prices.extend(money_values(block))
+    card_dicts: list[dict[str, Any]] = []
+
+    for item in candidates:
+        if isinstance(item, dict):
+            prices = item.get("observed_prices", item.get("observed_prices_eur", []))
+            candidate_prices.extend(prices)
+            card_dicts.append(item)
+        else:
+            prices = money_values(item)
+            candidate_prices.extend(prices)
+            card_dicts.append({
+                "text": item,
+                "observed_prices_eur": prices,
+                "observed_duration_minutes": duration_minutes(item),
+                "protection_label": protection_label(item),
+            })
 
     banner = cheapest_banner_price(page_text)
-    if candidate_prices and banner is not None:
-        lowest_price: float | None = min(min(candidate_prices), banner)
-    elif candidate_prices:
-        lowest_price = min(candidate_prices)
-    elif banner is not None:
+    if candidate_prices:
+        lowest_card_price = min(candidate_prices)
+        if banner is not None and banner >= 50.0:
+            lowest_price: float | None = min(lowest_card_price, banner)
+        else:
+            lowest_price = lowest_card_price
+    elif banner is not None and banner >= 50.0:
         lowest_price = banner
     elif status == "observed":
-        all_prices = money_values(page_text)
-        lowest_price = min(all_prices) if all_prices else None
+        all_text_prices = money_values(page_text)
+        lowest_price = min(all_text_prices) if all_text_prices else None
     else:
         lowest_price = None
 
-    all_card_text = "\n".join(candidates)
+    if (candidate_prices or (banner is not None and banner >= 50.0)) and status == "incomplete":
+        status = "observed"
+
+    all_card_text = "\n".join(c.get("text", "") for c in card_dicts)
     return {
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source": "Google Flights UI",
@@ -180,21 +300,35 @@ def make_observation(
         "lowest_observed_price_eur": lowest_price,
         "protection_label": protection_label(all_card_text or page_text),
         "seller_confirmation_required": True,
-        "candidate_cards": [
-            {
-                "text": block,
-                "observed_prices_eur": money_values(block),
-                "observed_duration_minutes": duration_minutes(block),
-                "protection_label": protection_label(block),
-            }
-            for block in candidates
-        ],
+        "candidate_cards": card_dicts,
         "notes": [
             "Read from the rendered Google Flights UI; fares and availability are volatile.",
             "No booking or checkout action was performed.",
             "Baggage through-checking and missed-connection protection require seller confirmation.",
         ],
     }
+
+
+async def switch_to_cheapest_tab(page: Page) -> bool:
+    """Ensure Google Flights is sorted by Price / Cheapest tab if not already active."""
+    # If the URL already specifies tfu=EgoIABAAGAAgAigB, cheapest sort is active natively
+    if "tfu=EgoIABAAGAAgAigB" in page.url:
+        return False
+
+    # Check if dropdown says 'Sorted by top flights'
+    try:
+        sort_btn = page.locator("button:has-text('Sorted by top flights'), [aria-label*='Sorted by top flights']")
+        if await sort_btn.count() > 0 and await sort_btn.first.is_visible():
+            await sort_btn.first.click(timeout=1500)
+            await page.wait_for_timeout(1000)
+            price_opt = page.locator("[role='menuitem']:has-text('Price'), [role='option']:has-text('Price'), span:text-is('Price')")
+            if await price_opt.count() > 0:
+                await price_opt.first.click(timeout=1500)
+                await page.wait_for_timeout(2500)
+                return True
+    except Exception:
+        pass
+    return False
 
 
 async def scan_pair(
@@ -223,19 +357,31 @@ async def scan_pair(
         pass
     page_text = await wait_for_results(page, timeout_ms)
 
-    # If results are still loading or showed a temporary glitch, give a brief retry
-    if page_status(page_text) == "incomplete":
+    # If results glitched or showed 'something went wrong' / 'no results', click Reload
+    if "something went wrong" in page_text.lower() or "no results returned" in page_text.lower() or page_status(page_text) == "incomplete":
         try:
             reload_btn = page.get_by_role("button", name="Reload", exact=True)
             if await reload_btn.count() > 0 and await reload_btn.first.is_visible():
                 await reload_btn.click(timeout=2000)
-            else:
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(3500)
+                page_text = await wait_for_results(page, timeout_ms)
         except Exception:
-            await page.wait_for_timeout(2000)
-        page_text = await wait_for_results(page, timeout_ms)
+            pass
 
-    candidates = await visible_candidate_blocks(page)
+    # Ensure results are sorted by Price / Cheapest tab (if not already handled by tfu param)
+    switched = await switch_to_cheapest_tab(page)
+    if switched:
+        await page.wait_for_timeout(2000)
+
+    # Extract clean candidate cards directly without clicking 'more flights'
+    candidates = await extract_clean_candidate_cards(page)
+
+    # Refresh full body text after cards render
+    try:
+        page_text = await page.locator("body").inner_text()
+    except Exception:
+        pass
+
     observation = make_observation(
         origin=origin,
         destination=destination,
@@ -342,10 +488,14 @@ async def run(args: argparse.Namespace) -> int:
             str(profile_dir),
             headless=False,
             executable_path=browser_executable,
-            locale="en-IE",
+            locale="en-US",
             viewport={"width": 1440, "height": 1000},
             args=["--disable-blink-features=AutomationControlled"],
         )
+        await context.add_cookies([
+            {"name": "SOCS", "value": "CAESEwgDEgk1ODEzNzI3NDQaAmVuIAEaBgiAo_mwBg", "domain": ".google.com", "path": "/"},
+            {"name": "CONSENT", "value": "PENDING+999", "domain": ".google.com", "path": "/"},
+        ])
         page = context.pages[0] if context.pages else await context.new_page()
         observations: list[dict[str, Any]] = []
         try:
@@ -354,7 +504,12 @@ async def run(args: argparse.Namespace) -> int:
                 if args.skip_existing and pair_file.exists():
                     try:
                         cached = json.loads(pair_file.read_text(encoding="utf-8"))
-                        if cached.get("status") == "observed" and cached.get("fetched_at", "").startswith(today_stamp):
+                        if (
+                            cached.get("status") == "observed"
+                            and cached.get("fetched_at", "").startswith(today_stamp)
+                            and cached.get("origin") == args.origin
+                            and cached.get("destination") == args.dest
+                        ):
                             print(f"[Google Flights] [{index}/{len(pairs)}] {departure} -> {return_date} (cached today: €{cached.get('lowest_observed_price_eur')})")
                             observations.append(cached)
                             report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
@@ -401,10 +556,16 @@ async def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def parser() -> argparse.ArgumentParser:
-    cfg = load_config()
+def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
+    pre_p = argparse.ArgumentParser(add_help=False)
+    pre_p.add_argument("--config", help="Optional path to config.toml")
+    pre_p.add_argument("--trip", help="Optional path or name of trip config file")
+    pre_args, _ = pre_p.parse_known_args(argv)
+
+    cfg = load_config(pre_args.config, pre_args.trip)
     res = argparse.ArgumentParser(description="Human-supervised Google Flights matrix scanner (no purchase actions).")
-    res.add_argument("--config", help="Optional path to config.toml")
+    res.add_argument("--config", default=pre_args.config, help="Optional path to config.toml")
+    res.add_argument("--trip", default=pre_args.trip, help="Optional path or name of trip config file")
     res.add_argument("--origin", default=cfg.trip.origin)
     res.add_argument("--dest", default=cfg.trip.dest)
 

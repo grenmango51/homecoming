@@ -1,0 +1,30 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Helsinki (HEL) -> Hanoi (HAN)
+# ==============================================================================
+
+[trip]
+# Departure and arrival airport codes (IATA 3-letter uppercase)
+origin = "HEL"
+dest = "HAN"
+
+# Minimum stay duration at destination in nights
+min_stay_nights = 21
+
+# Strategy for generating search date pairs:
+# - "range": Cartesian product of departure dates and return dates (e.g. 5x5 = 25 pairs)
+# - "window": All valid departures & returns inside the full holiday window (e.g. 66 pairs)
+date_mode = "range"
+
+# ------------------------------------------------------------------------------
+# Date settings for "range" mode (active when date_mode = "range")
+# ------------------------------------------------------------------------------
+depart_from = "2026-12-09"
+depart_to = "2026-12-13"
+return_from = "2027-01-05"
+return_to = "2027-01-09"
+
+# ------------------------------------------------------------------------------
+# Date settings for "window" mode (active when date_mode = "window")
+# ------------------------------------------------------------------------------
+window_start = "2026-12-09"
+window_end = "2027-01-09"

@@ -1,0 +1,16 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Helsinki (HEL) -> Brussels / Belgium (BRU) [ONE-WAY]
+# ==============================================================================
+
+[trip]
+origin = "HEL"
+dest = "BRU"
+trip_type = "one-way"
+date_mode = "range"
+
+# 15 December to 19 December 2026
+depart_from = "2026-12-15"
+depart_to = "2026-12-19"
+return_from = ""
+return_to = ""
+min_stay_nights = 0

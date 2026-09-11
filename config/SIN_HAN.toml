@@ -1,0 +1,15 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Singapore (SIN) -> Hanoi (HAN) [ROUND-TRIP]
+# ==============================================================================
+
+[trip]
+origin = "SIN"
+dest = "HAN"
+trip_type = "round-trip"
+date_mode = "range"
+
+depart_from = "2026-12-13"
+depart_to = "2026-12-16"
+return_from = "2027-01-09"
+return_to = "2027-01-10"
+min_stay_nights = 18
