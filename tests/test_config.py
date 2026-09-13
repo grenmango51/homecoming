@@ -12,15 +12,23 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(len(cfg.trip.origin), 3)
         self.assertEqual(cfg.trip.dest, "HAN")
         self.assertGreater(cfg.trip.min_stay_nights, 0)
-        self.assertIn(cfg.trip.date_mode, ["range", "window"])
+        self.assertIn(cfg.trip.date_mode, ["range", "window", "exact"])
         self.assertIn(cfg.execution.strategy, ["parallel", "sequential"])
         self.assertIsInstance(cfg.execution.skip_existing, bool)
         self.assertIsInstance(cfg.execution.auto_compare, bool)
 
     def test_range_mode_generates_pairs(self) -> None:
         cfg = load_config()
+        cfg.trip.date_mode = "range"
         pairs = cfg.trip.get_search_pairs()
         self.assertGreater(len(pairs), 0)
+
+    def test_exact_mode_generates_pairs(self) -> None:
+        cfg = load_config()
+        cfg.trip.date_mode = "exact"
+        cfg.trip.exact_pairs = [["2026-12-09", "2027-01-06"], ["2026-12-09", "2027-01-07"]]
+        pairs = cfg.trip.get_search_pairs()
+        self.assertEqual(len(pairs), 2)
 
     def test_window_mode_generates_pairs(self) -> None:
         cfg = load_config()

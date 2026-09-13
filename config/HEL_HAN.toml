@@ -11,9 +11,19 @@ dest = "HAN"
 min_stay_nights = 21
 
 # Strategy for generating search date pairs:
+# - "exact": Specific list of departure and return date pairs (3 key focus dates)
 # - "range": Cartesian product of departure dates and return dates (e.g. 5x5 = 25 pairs)
 # - "window": All valid departures & returns inside the full holiday window (e.g. 66 pairs)
-date_mode = "range"
+date_mode = "exact"
+
+# ------------------------------------------------------------------------------
+# Date settings for "exact" mode (active when date_mode = "exact")
+# ------------------------------------------------------------------------------
+exact_pairs = [
+    ["2026-12-09", "2027-01-06"],
+    ["2026-12-09", "2027-01-07"],
+    ["2026-12-09", "2027-01-09"],
+]
 
 # ------------------------------------------------------------------------------
 # Date settings for "range" mode (active when date_mode = "range")

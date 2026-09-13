@@ -339,8 +339,9 @@ async def scan_pair(
     departure: dt.date,
     return_date: dt.date,
     timeout_ms: int,
+    gl: str = "FI",
 ) -> dict[str, Any]:
-    query_url = flight_search_url(origin, destination, departure, return_date)
+    query_url = flight_search_url(origin, destination, departure, return_date, gl=gl)
     try:
         await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
@@ -390,6 +391,7 @@ async def scan_pair(
         page_text=page_text,
         candidates=candidates,
     )
+    observation["gl"] = gl
     if observation["status"] != "observed":
         observation["page_url"] = page.url
         observation["visible_page_text"] = page_text[:2000]
@@ -452,7 +454,10 @@ def write_daily_report(results_dir: Path, observations: list[dict[str, Any]], re
 
 
 async def run(args: argparse.Namespace) -> int:
-    if args.depart_from:
+    cfg = load_config(args.config, args.trip)
+    if cfg.trip.date_mode == "exact" and cfg.trip.exact_pairs and not (args.depart_from and args.depart_to):
+        pairs = [p for p in cfg.trip.get_search_pairs() if p[1] is not None]
+    elif args.depart_from:
         pairs = build_search_pairs(
             depart_from=args.depart_from,
             depart_to=args.depart_to,
@@ -469,12 +474,14 @@ async def run(args: argparse.Namespace) -> int:
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")
 
+    gl = getattr(args, "gl", None) or cfg.google_flights.gl or "SE"
+
     profile_dir = Path(os.environ.get("GOOGLE_FLIGHTS_PROFILE_DIR", args.profile_dir)).resolve()
     results_dir = Path(args.results_dir).resolve()
     browser_executable = resolve_browser_executable(args.browser_executable)
     profile_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[Google Flights] Scanning {len(pairs)} exact date pairs in a visible browser. Results: {results_dir}")
+    print(f"[Google Flights] Scanning {len(pairs)} exact date pairs in a visible browser (Point of Sale: gl={gl}). Results: {results_dir}")
     print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
     if browser_executable:
         print(f"[Google Flights] Using installed browser: {browser_executable}")
@@ -509,6 +516,7 @@ async def run(args: argparse.Namespace) -> int:
                             and cached.get("fetched_at", "").startswith(today_stamp)
                             and cached.get("origin") == args.origin
                             and cached.get("destination") == args.dest
+                            and cached.get("gl", gl) == gl
                         ):
                             print(f"[Google Flights] [{index}/{len(pairs)}] {departure} -> {return_date} (cached today: €{cached.get('lowest_observed_price_eur')})")
                             observations.append(cached)
@@ -526,6 +534,7 @@ async def run(args: argparse.Namespace) -> int:
                         departure=departure,
                         return_date=return_date,
                         timeout_ms=args.timeout_seconds * 1000,
+                        gl=gl,
                     )
                 except Exception as error:
                     observation = failed_observation(
@@ -584,6 +593,7 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         res.add_argument("--return-from", help="Optional explicit start of return range")
         res.add_argument("--return-to", help="Optional explicit end of return range")
 
+    res.add_argument("--gl", default=cfg.google_flights.gl, help="Point of sale region code (e.g. SE, FI, DE)")
     res.add_argument("--min-stay-nights", type=int, default=cfg.trip.min_stay_nights, help="Minimum stay duration in nights")
     res.add_argument("--delay-seconds", type=int, default=cfg.google_flights.delay_seconds, help="Delay between pages in seconds")
     res.add_argument("--timeout-seconds", type=int, default=cfg.google_flights.timeout_seconds)

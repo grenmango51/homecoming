@@ -548,7 +548,10 @@ async def scan_pair(
 
 
 async def run(args: argparse.Namespace) -> int:
-    if args.depart_from:
+    cfg = load_config(args.config, args.trip)
+    if cfg.trip.date_mode == "exact" and cfg.trip.exact_pairs and not (args.depart_from and args.depart_to):
+        pairs = [p for p in cfg.trip.get_search_pairs() if p[1] is not None]
+    elif args.depart_from:
         pairs = build_search_pairs(
             depart_from=args.depart_from,
             depart_to=args.depart_to,

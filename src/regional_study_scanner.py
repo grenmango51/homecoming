@@ -101,7 +101,7 @@ def extract_money_values(text: str, curr: str = "EUR") -> list[float]:
             normalized = raw.replace(",", "").replace(".", "")
         try:
             val = float(normalized)
-            if val > 0:
+            if val >= 15.0:
                 values.append(val)
         except ValueError:
             continue
@@ -110,7 +110,9 @@ def extract_money_values(text: str, curr: str = "EUR") -> list[float]:
         for raw in PRICE_RE.findall(text) + EUROS_RE.findall(text):
             normalized = raw.replace(" ", "").replace("\u00a0", "").replace(",", "")
             try:
-                values.append(float(normalized))
+                val = float(normalized)
+                if val >= 15.0:
+                    values.append(val)
             except ValueError:
                 continue
     return values

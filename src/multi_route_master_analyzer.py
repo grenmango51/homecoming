@@ -18,8 +18,13 @@ Evaluates:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 import pandas as pd
 from tabulate import tabulate
 
@@ -108,7 +113,7 @@ def load_route_data(route_info: dict[str, Any], gl_map: dict[str, str]) -> pd.Da
             continue
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
-            if d.get("status") == "observed" and d.get("lowest_price_eur"):
+            if d.get("status") == "observed" and d.get("lowest_price_eur") and float(d.get("lowest_price_eur")) >= 15.0:
                 gl = d.get("gl")
                 top_c = d.get("cards", [{}])[0] if d.get("cards") else {}
                 carrier = ", ".join(top_c.get("carriers", [])) or "Multiple Airlines"
@@ -268,10 +273,11 @@ def generate_master_arbitrage_report() -> str:
             "Corridor": rc["title"],
             "Corridor Type": rc["type"],
             "Obs / Dates": f"{res['total_observations']} / {res['date_pairs_count']}",
-            f"Domestic ({rc['domestic_gl']})": dom_str,
-            "Cheapest POS (Mean)": f"{win_mean_pos}: {win_mean_val}",
-            "Cheapest POS (Absolute Min)": f"{win_min_pos}: {win_min_val}",
-            "Max Arbitrage Spread": f"€{res['max_savings_eur']:.0f} ({res['max_savings_pct']}%)",
+            "Domestic Baseline": f"{rc['domestic_gl']}: {dom_str}",
+            "Cheapest POS (Mean)": f"{win_mean_pos} ({win_mean_val})",
+            "Cheapest POS (Absolute Min)": f"{win_min_pos} ({win_min_val})",
+            "Mean Savings vs Dom": savings_str,
+            "Max Single-Ticket Spread": f"€{res['max_savings_eur']:.0f} ({res['max_savings_pct']}%)",
         })
 
     matrix_df = pd.DataFrame(matrix_rows)

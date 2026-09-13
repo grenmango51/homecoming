@@ -23,13 +23,14 @@ class TripConfig:
     dest: str = "HAN"
     min_stay_nights: int = 21
     trip_type: str = "round-trip"  # "round-trip" or "one-way"
-    date_mode: str = "range"  # "range" or "window"
+    date_mode: str = "range"  # "range", "window", or "exact"
     depart_from: str | None = "2026-12-09"
     depart_to: str | None = "2026-12-13"
     return_from: str | None = "2027-01-05"
     return_to: str | None = "2027-01-09"
     window_start: str | None = "2026-12-09"
     window_end: str | None = "2027-01-09"
+    exact_pairs: list[list[str]] = field(default_factory=list)
 
     def get_search_pairs(self) -> list[tuple[dt.date, dt.date | None]]:
         """Generate search date pairs based on the configured date_mode and trip_type."""
@@ -39,6 +40,12 @@ class TripConfig:
                 last = dt.date.fromisoformat(self.depart_to)
                 return [(first + dt.timedelta(days=i), None) for i in range((last - first).days + 1)]
             return []
+
+        if self.date_mode == "exact" and self.exact_pairs:
+            return build_search_pairs(
+                exact_pairs=self.exact_pairs,
+                min_stay_nights=self.min_stay_nights,
+            )
 
         if self.date_mode == "window":
             return build_search_pairs(
@@ -77,6 +84,7 @@ def parse_optional_price(val: Any, default: float | None = None) -> float | None
 @dataclass
 class GoogleFlightsConfig:
     enabled: bool = True
+    gl: str = "SE"
     delay_seconds: int = 3
     timeout_seconds: int = 30
     reference_price: float | None = None
@@ -209,6 +217,7 @@ def load_config(
             return_to=trip_data.get("return_to") or None,
             window_start=trip_data.get("window_start") or None,
             window_end=trip_data.get("window_end") or None,
+            exact_pairs=trip_data.get("exact_pairs", []),
         ),
         execution=ExecutionConfig(
             strategy=str(exec_data.get("strategy", "parallel")),
@@ -218,6 +227,7 @@ def load_config(
         ),
         google_flights=GoogleFlightsConfig(
             enabled=bool(gf_data.get("enabled", True)),
+            gl=str(gf_data.get("gl", "SE")).strip().upper(),
             delay_seconds=int(gf_data.get("delay_seconds", 3)),
             timeout_seconds=int(gf_data.get("timeout_seconds", 30)),
             reference_price=gf_ref,

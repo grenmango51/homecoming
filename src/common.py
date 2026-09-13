@@ -31,6 +31,7 @@ def date_range(start: str, end: str) -> list[dt.date]:
 
 def build_search_pairs(
     *,
+    exact_pairs: list[list[str]] | list[tuple[str, str]] | None = None,
     window_start: str | None = None,
     window_end: str | None = None,
     depart_from: str | None = None,
@@ -39,13 +40,22 @@ def build_search_pairs(
     return_to: str | None = None,
     min_stay_nights: int = 21,
 ) -> list[tuple[dt.date, dt.date]]:
-    """Generate date pairs for either a continuous trip window or explicit ranges."""
+    """Generate date pairs for explicit pairs, a continuous trip window, or ranges."""
+    if exact_pairs:
+        pairs: list[tuple[dt.date, dt.date]] = []
+        for pair in exact_pairs:
+            dep = dt.date.fromisoformat(pair[0])
+            ret = dt.date.fromisoformat(pair[1])
+            if (ret - dep).days >= min_stay_nights:
+                pairs.append((dep, ret))
+        return pairs
+
     if window_start and window_end:
         start_d = dt.date.fromisoformat(window_start)
         end_d = dt.date.fromisoformat(window_end)
         if end_d < start_d:
             raise ValueError(f"Window end {window_end} is before start date {window_start}.")
-        pairs: list[tuple[dt.date, dt.date]] = []
+        pairs = []
         cur_dep = start_d
         while cur_dep <= end_d:
             cur_ret = cur_dep + dt.timedelta(days=min_stay_nights)
@@ -56,7 +66,7 @@ def build_search_pairs(
         return pairs
 
     if not (depart_from and depart_to and return_from and return_to):
-        raise ValueError("Must specify either window_start/window_end or full depart/return ranges.")
+        raise ValueError("Must specify either exact_pairs, window_start/window_end, or full depart/return ranges.")
 
     departures = date_range(depart_from, depart_to)
     returns = date_range(return_from, return_to)
