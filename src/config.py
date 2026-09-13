@@ -84,7 +84,7 @@ def parse_optional_price(val: Any, default: float | None = None) -> float | None
 @dataclass
 class GoogleFlightsConfig:
     enabled: bool = True
-    gl: str = "SE"
+    gl: str = "FI"
     delay_seconds: int = 3
     timeout_seconds: int = 30
     reference_price: float | None = None

@@ -28,7 +28,7 @@ browser_executable = ""
 enabled = true
 
 # Point of sale country code (e.g. "SE" for Sweden, "FI" for Finland, "DE" for Germany)
-gl = "SE"
+gl = "FI"
 
 # Delay between page loads in seconds
 delay_seconds = 3

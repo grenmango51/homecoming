@@ -44,7 +44,7 @@ DEFAULT_RESULTS_DIR = ROOT / "flight_results"
 GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 
 CHEAPEST_BANNER_RE = re.compile(
-    r"[Cc]heapest[^\n\r€\d]*(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE
+    r"[Cc]heapest[\s\S]{0,100}?(?:€\s*|eur\s*)([0-9][0-9.,\s]*)", re.IGNORECASE
 )
 
 USER_TFS_TEMPLATE = "CBwQAhojEgoyMDI2LTEyLTA5agwIAhIIL20vMDNraG5yBwgBEgNIQU4aIxIKMjAyNy0wMS0wNWoHCAESA0hBTnIMCAISCC9tLzAza2huQAFIAXABggELCP___________wGYAQE"
@@ -380,6 +380,11 @@ async def scan_pair(
     # Refresh full body text after cards render
     try:
         page_text = await page.locator("body").inner_text()
+        cheapest_tab = page.locator("[role='tab']:has-text('Cheapest'), button:has-text('Cheapest'), [aria-label*='Cheapest']").first
+        if await cheapest_tab.count() > 0:
+            tab_txt = await cheapest_tab.inner_text()
+            if tab_txt:
+                page_text = tab_txt + "\n" + page_text
     except Exception:
         pass
 
@@ -474,7 +479,7 @@ async def run(args: argparse.Namespace) -> int:
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")
 
-    gl = getattr(args, "gl", None) or cfg.google_flights.gl or "SE"
+    gl = getattr(args, "gl", None) or cfg.google_flights.gl or "FI"
 
     profile_dir = Path(os.environ.get("GOOGLE_FLIGHTS_PROFILE_DIR", args.profile_dir)).resolve()
     results_dir = Path(args.results_dir).resolve()
