@@ -10,17 +10,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime as dt
-import os
+import subprocess
 import sys
 from pathlib import Path
 
-from src.config import load_config, AppConfig, PROJECT_ROOT
+from src.common import configure_stdio
+from src.config import PROJECT_ROOT, AppConfig, load_config
+from src.reporting import today_stamp
 
 ROOT = PROJECT_ROOT
 
+# Windows venv layout; on other platforms the active interpreter is used.
+VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 
-async def stream_output(stream: asyncio.StreamReader, log_file: Path, prefix: str = "") -> None:
+SCRAPERS = (
+    ("Google Flights", "src.google_flights", "google_flights"),
+    ("Skyscanner", "src.skyscanner", "skyscanner"),
+)
+
+
+async def stream_output(stream: asyncio.StreamReader, log_file: Path) -> None:
     """Stream process stdout/stderr in real-time to console and log file."""
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with log_file.open("a", encoding="utf-8", errors="replace") as f:
@@ -44,8 +53,7 @@ async def run_scraper(
     skip_existing: bool | None = None,
 ) -> int:
     """Launch a scraper module as an asynchronous subprocess with live output logging."""
-    venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
-    py_exec = str(venv_python) if venv_python.is_file() else sys.executable
+    py_exec = str(VENV_PYTHON) if VENV_PYTHON.is_file() else sys.executable
     cmd = [py_exec, "-m", module]
     if config_path:
         cmd.extend(["--config", str(config_path)])
@@ -63,7 +71,7 @@ async def run_scraper(
     )
 
     if proc.stdout:
-        await stream_output(proc.stdout, log_path, prefix=name)
+        await stream_output(proc.stdout, log_path)
 
     exit_code = await proc.wait()
     status_msg = "COMPLETED" if exit_code == 0 else f"EXITED with code {exit_code}"
@@ -76,11 +84,12 @@ async def orchestrate(
     trip_path: Path | str | None = None,
     skip_existing: bool | None = None,
 ) -> int:
+    """Run the enabled scrapers, then the cross-platform comparison."""
     cfg: AppConfig = load_config(config_path, trip_path)
     if skip_existing is not None:
         cfg.execution.skip_existing = skip_existing
 
-    today = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
+    today = today_stamp()
     print("=" * 65)
     print(f" FLIGHT FINDER UNIFIED RUNNER ({today})")
     print("=" * 65)
@@ -91,6 +100,8 @@ async def orchestrate(
     if cfg.trip.date_mode == "range":
         print(f" Departures:       {cfg.trip.depart_from} to {cfg.trip.depart_to}")
         print(f" Returns:          {cfg.trip.return_from} to {cfg.trip.return_to}")
+    elif cfg.trip.date_mode == "exact":
+        print(f" Exact Pairs:      {len(cfg.trip.exact_pairs)}")
     else:
         print(f" Window:           {cfg.trip.window_start} to {cfg.trip.window_end}")
     print(f" Min Stay:         {cfg.trip.min_stay_nights} nights")
@@ -100,48 +111,39 @@ async def orchestrate(
     print(f" Skyscanner:       {'ENABLED' if cfg.skyscanner.enabled else 'DISABLED'}")
     print("=" * 65 + "\n")
 
-    tasks = []
-    google_log = cfg.google_flights.resolved_results_dir() / "logs" / f"run_google_{today}.log"
-    skyscanner_log = cfg.skyscanner.resolved_results_dir() / "logs" / f"run_skyscanner_{today}.log"
+    active_trip = trip_path or cfg.trip_file
+    enabled = [
+        (name, module, getattr(cfg, attr).resolved_results_dir() / "logs" / f"run_{attr}_{today}.log")
+        for name, module, attr in SCRAPERS
+        if getattr(cfg, attr).enabled
+    ]
+
+    def launch(name: str, module: str, log_path: Path):
+        return run_scraper(name, module, log_path, config_path, active_trip, cfg.execution.skip_existing)
 
     exit_codes: dict[str, int] = {}
-    active_trip = trip_path or cfg.trip_file
-
     if cfg.execution.strategy == "parallel":
-        coros = []
-        if cfg.google_flights.enabled:
-            coros.append(("Google Flights", run_scraper("Google Flights", "src.google_flights", google_log, config_path, active_trip, cfg.execution.skip_existing)))
-        if cfg.skyscanner.enabled:
-            coros.append(("Skyscanner", run_scraper("Skyscanner", "src.skyscanner", skyscanner_log, config_path, active_trip, cfg.execution.skip_existing)))
-
-        results = await asyncio.gather(*(c[1] for c in coros), return_exceptions=False)
-        for (name, _), code in zip(coros, results):
-            exit_codes[name] = code
+        results = await asyncio.gather(*(launch(*scraper) for scraper in enabled))
+        exit_codes = {name: code for (name, _, _), code in zip(enabled, results, strict=True)}
     else:
-        # Sequential execution
-        if cfg.google_flights.enabled:
-            exit_codes["Google Flights"] = await run_scraper("Google Flights", "src.google_flights", google_log, config_path, active_trip, cfg.execution.skip_existing)
-        if cfg.skyscanner.enabled:
-            exit_codes["Skyscanner"] = await run_scraper("Skyscanner", "src.skyscanner", skyscanner_log, config_path, active_trip, cfg.execution.skip_existing)
+        for scraper in enabled:
+            exit_codes[scraper[0]] = await launch(*scraper)
 
     print("\n" + "=" * 65)
     print(" SCRAPING SUMMARY")
     print("=" * 65)
     for name, code in exit_codes.items():
-        state = "SUCCESS" if code == 0 else f"WARNING / EXIT {code}"
-        print(f" - {name.ljust(18)}: {state}")
+        print(f" - {name.ljust(18)}: {'SUCCESS' if code == 0 else f'WARNING / EXIT {code}'}")
     print("=" * 65 + "\n")
 
-    # If all scrapers failed, skip comparison
-    all_failed = all(code != 0 for code in exit_codes.values()) if exit_codes else False
-    if all_failed:
+    if exit_codes and all(code != 0 for code in exit_codes.values()):
         print("[Comparison] Skipping price comparison because all scrapers failed.")
         return 1
 
-    # Run comparison if requested
     if cfg.execution.auto_compare:
         print("[Comparison] Running cross-platform price comparison...")
         from src.compare import main as compare_main
+
         comp_args: list[str] = []
         if config_path:
             comp_args.extend(["--config", str(config_path)])
@@ -153,30 +155,25 @@ async def orchestrate(
             if exc.code not in (0, None):
                 print(f"[Comparison] Warning: Comparison exited with code {exc.code}")
 
-    # Return non-zero if all scrapers failed
-    if any(code == 0 for code in exit_codes.values()):
-        return 0
-    return 1 if exit_codes else 0
+    return 0
 
 
 def ensure_venv() -> None:
-    """If running with system Python, automatically delegate to .venv Python."""
-    venv_py = ROOT / ".venv" / "Scripts" / "python.exe"
-    if venv_py.is_file():
-        try:
-            if Path(sys.executable).resolve() != venv_py.resolve():
-                import subprocess
-                res = subprocess.run([str(venv_py)] + sys.argv, cwd=str(ROOT))
-                sys.exit(res.returncode)
-        except Exception:
-            pass
+    """Re-exec under the project venv when started with a different interpreter."""
+    if not VENV_PYTHON.is_file():
+        return
+    try:
+        if Path(sys.executable).resolve() == VENV_PYTHON.resolve():
+            return
+        result = subprocess.run([str(VENV_PYTHON)] + sys.argv, cwd=str(ROOT))
+    except OSError:
+        return
+    sys.exit(result.returncode)
 
 
 def main() -> None:
     ensure_venv()
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+    configure_stdio()
 
     parser = argparse.ArgumentParser(description="Unified parallel orchestrator for flight scrapers.")
     parser.add_argument("--config", type=Path, help="Path to custom config.toml")

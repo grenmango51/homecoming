@@ -9,8 +9,8 @@ from __future__ import annotations
 import datetime as dt
 import os
 import re
+import sys
 from pathlib import Path
-from typing import Any
 
 # Currency & duration regular expressions
 PRICE_RE = re.compile(r"(?:€\s*|EUR\s*)([0-9][0-9.,\s]*)", re.IGNORECASE)
@@ -20,6 +20,12 @@ EUROS_RE = re.compile(r"\b([0-9][0-9.,\s]*)\s+euros?\b", re.IGNORECASE)
 DURATION_EN_RE = re.compile(r"\b(\d{1,2})\s*(?:h|hr|hours?)\s*(?:(\d{1,2})\s*(?:m|min|minutes?))?\b", re.IGNORECASE)
 DURATION_FI_RE = re.compile(r"\b(\d{1,2})\s*(?:t|tuntia)\s*(?:(\d{1,2})\s*(?:min|minuuttia))?\b", re.IGNORECASE)
 
+def configure_stdio() -> None:
+    """Force UTF-8 line-buffered output so fare symbols survive a Windows console."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+
 
 def date_range(start: str, end: str) -> list[dt.date]:
     """Generate an inclusive list of dates between ISO format start and end."""
@@ -27,7 +33,6 @@ def date_range(start: str, end: str) -> list[dt.date]:
     if last < first:
         raise ValueError(f"End date {end} is before start date {start}.")
     return [first + dt.timedelta(days=offset) for offset in range((last - first).days + 1)]
-
 
 def build_search_pairs(
     *,
@@ -77,7 +82,6 @@ def build_search_pairs(
         if (return_date - departure).days >= min_stay_nights
     ]
 
-
 def resolve_browser_executable(requested: str | None = None) -> str | None:
     """Prefer an installed stable browser when Playwright Chromium is unusable.
 
@@ -99,7 +103,6 @@ def resolve_browser_executable(requested: str | None = None) -> str | None:
         if candidate.is_file():
             return str(candidate)
     return None
-
 
 def parse_numeric_price(raw: str) -> float | None:
     """Clean and convert price string to float, handling separators and symbols."""
@@ -124,7 +127,6 @@ def parse_numeric_price(raw: str) -> float | None:
         return val if 50.0 <= val <= 25000.0 else None
     except ValueError:
         return None
-
 
 def duration_minutes(value: str) -> int | None:
     """Parse duration strings like '16 hr 15 min', '2h 30m', or '17 t 35 min' into minutes."""

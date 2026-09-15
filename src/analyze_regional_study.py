@@ -8,17 +8,20 @@ and generates structured matrices and markdown report sections.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
 import pandas as pd
 from tabulate import tabulate
 
 from src.config import PROJECT_ROOT
+from src.reporting import read_json
 
 STUDY_RESULTS_DIR = PROJECT_ROOT / "flight_results_study"
 
-# Estimated September 2026 live Forex rates against EUR (1 EUR = X Foreign Currency)
+# Static September 2026 estimates (1 EUR = X foreign currency). These are NOT
+# fetched live, so the currency-arbitrage table drifts as rates move; refresh
+# them before drawing conclusions from a newer scan.
 FX_RATES_PER_EUR = {
     "EUR": 1.0,
     "USD": 1.085,
@@ -32,17 +35,15 @@ FX_RATES_PER_EUR = {
 
 
 def load_study_data(results_dir: Path = STUDY_RESULTS_DIR) -> list[dict[str, Any]]:
-    records = []
+    """Load every observed record written by the regional study scanner."""
     if not results_dir.exists():
-        return records
-    for file in results_dir.glob("*.json"):
-        try:
-            data = json.loads(file.read_text(encoding="utf-8"))
-            if data.get("status") == "observed" and data.get("lowest_price") is not None:
-                data["_filepath"] = str(file)
-                records.append(data)
-        except Exception:
-            continue
+        return []
+    records = []
+    for file in sorted(results_dir.glob("*.json")):
+        data = read_json(file)
+        if isinstance(data, dict) and data.get("status") == "observed" and data.get("lowest_price") is not None:
+            data["_filepath"] = str(file)
+            records.append(data)
     return records
 
 
@@ -103,7 +104,7 @@ def analyze_outbound_pos_arbitrage(records: list[dict[str, Any]]) -> tuple[pd.Da
     # Summary analysis per date pair
     summary_rows = []
     for date_pair, group in df.groupby("date_pair"):
-        prices_by_gl = dict(zip(group["gl"], group["price_eur"]))
+        prices_by_gl = dict(zip(group["gl"], group["price_eur"], strict=True))
         fi_price = prices_by_gl.get("FI") or prices_by_gl.get("NONE")
         if not prices_by_gl:
             continue

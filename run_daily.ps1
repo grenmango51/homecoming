@@ -25,7 +25,7 @@ Write-Host " Log file: $LogFile" -ForegroundColor DarkGray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # Run find_flights.py with --skip-existing and 3s delay
-& $VenvPython find_flights.py --skip-existing --delay-seconds 3 *>&1 | Tee-Object -FilePath $LogFile
+& $VenvPython find_flights.py --skip-existing --delay-seconds 3 @args *>&1 | Tee-Object -FilePath $LogFile
 
 $ScanExitCode = $LASTEXITCODE
 if ($ScanExitCode -eq 0) {

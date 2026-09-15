@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from src.config import load_config, PROJECT_ROOT
+from src.common import configure_stdio
+from src.config import PROJECT_ROOT, load_config
 
 ROOT = PROJECT_ROOT
 DEFAULT_GOOGLE_DIR = ROOT / "flight_results"
@@ -179,7 +180,7 @@ def render_table(comparisons: list[dict[str, Any]]) -> str:
     widths = [10, 10, 6, 11, 15, 13, 16, 9]
 
     sep_line = "+-" + "-+-".join("-" * w for w in widths) + "-+"
-    header_line = "| " + " | ".join(h.ljust(w) for h, w in zip(headers, widths)) + " |"
+    header_line = "| " + " | ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)) + " |"
 
     lines = [sep_line, header_line, sep_line]
 
@@ -313,9 +314,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+    configure_stdio()
 
     args = parse_args(argv)
     google_dir = Path(args.google_dir).resolve()
@@ -352,7 +351,7 @@ def main(argv: list[str] | None = None) -> None:
     print("\n" + render_table(comparisons))
 
     csv_out, json_out = write_comparison_reports(output_dir, comparisons)
-    print(f"\nSaved comparison reports:")
+    print("\nSaved comparison reports:")
     print(f"  CSV:  {csv_out.name}")
     print(f"  JSON: {json_out.name}")
 

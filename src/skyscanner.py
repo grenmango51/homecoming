@@ -10,12 +10,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import datetime as dt
 import json
 import os
 import random
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,185 +29,23 @@ except ImportError:
             "and then: .\\.venv\\Scripts\\patchright.exe install chromium"
         ) from error
 
-from src.common import (
-    PRICE_RE,
-    PRICE_SUFFIX_RE,
-    date_range,
-    build_search_pairs,
-    resolve_browser_executable,
-    parse_numeric_price,
-    duration_minutes,
+from src import reporting
+from src.common import build_search_pairs, configure_stdio, resolve_browser_executable
+from src.config import PROJECT_ROOT, load_config
+from src.reporting import SKYSCANNER_REPORT_FIELDS
+from src.skyscanner_parse import (
+    SOURCE,
+    extract_from_xhr_payloads,
+    flight_search_url,
+    is_challenge_page,
+    make_observation,
+    money_values,
 )
-from src.config import load_config, PROJECT_ROOT
 
 ROOT = PROJECT_ROOT
-DEFAULT_PROFILE_DIR = ROOT / ".skyscanner-profile"
-DEFAULT_RESULTS_DIR = ROOT / "flight_results_skyscanner"
-SKYSCANNER_BASE = "https://www.skyscanner.net"
+REPORT_STEM = "daily_fare_report_skyscanner"
 
-CHEAPEST_TAB_RE = re.compile(
-    r"(?:halvin|cheapest)\s*(?:alk\.|alkaen|from)?\s*(?:€\s*|EUR\s*)?([0-9][0-9.,\s]*)\s*(?:€|eur)?",
-    re.IGNORECASE,
-)
-DURATION_EN_RE = re.compile(r"\b(\d{1,2})\s*(?:h|hr|hours?)\s*(?:(\d{1,2})\s*(?:m|min|minutes?))?\b", re.IGNORECASE)
-DURATION_FI_RE = re.compile(r"\b(\d{1,2})\s*(?:t|tuntia)\s*(?:(\d{1,2})\s*(?:min|minuuttia))?\b", re.IGNORECASE)
-
-
-def cheapest_tab_price(text: str) -> float | None:
-    """Extract price specifically labeled as the cheapest / halvin option."""
-    match = CHEAPEST_TAB_RE.search(text)
-    if not match:
-        return None
-    return parse_numeric_price(match.group(1))
-
-
-def to_yymmdd(date_obj: dt.date) -> str:
-    """Format date to Skyscanner YYMMDD string (e.g. 2026-12-09 -> '261209')."""
-    return date_obj.strftime("%y%m%d")
-
-
-def flight_search_url(
-    origin: str,
-    destination: str,
-    departure: dt.date,
-    return_date: dt.date,
-    *,
-    base_url: str = SKYSCANNER_BASE,
-) -> str:
-    """Build canonical Skyscanner round-trip flight search URL."""
-    dep_str = to_yymmdd(departure)
-    ret_str = to_yymmdd(return_date)
-    orig = origin.strip().lower()
-    dest = destination.strip().lower()
-    return (
-        f"{base_url}/transport/flights/{orig}/{dest}/{dep_str}/{ret_str}/"
-        f"?adultsv2=1&cabinclass=economy&childrenv2=&ref=home&rtn=1"
-        f"&outboundaltsenabled=false&inboundaltsenabled=false&preferdirects=false"
-    )
-
-
-def money_values(text: str) -> list[float]:
-    """Find all potential flight price figures in euro format."""
-    values: list[float] = []
-    for match in PRICE_RE.findall(text) + PRICE_SUFFIX_RE.findall(text):
-        num = parse_numeric_price(match)
-        if num is not None:
-            values.append(num)
-    return values
-
-
-def is_challenge_page(url: str, text: str) -> bool:
-    """Determine if current view is an anti-bot challenge / verification screen."""
-    lowered_url = url.lower()
-    lowered_text = text.lower()
-    if any(marker in lowered_url for marker in ("captcha", "/sttc/px/", "perimeterx")):
-        return True
-    if any(
-        phrase in lowered_text
-        for phrase in (
-            "robotti",
-            "press & hold",
-            "verify you are human",
-            "unusual traffic",
-            "oletko oikea henkilö vai robotti",
-        )
-    ):
-        return True
-    return False
-
-
-def page_status(url: str, text: str) -> str:
-    """Classify Skyscanner page status."""
-    if is_challenge_page(url, text):
-        return "user_action_required"
-    lowered = text.lower()
-    if "sign in" in lowered and len(text) < 800:
-        return "user_action_required"
-    if "oops, something went wrong" in lowered or ("mitään ei löytynyt" in lowered and "tulosta" not in lowered):
-        return "incomplete"
-    if any(marker in lowered for marker in ("results", "tulosta", "halvin", "cheapest", "paras", "nopein", "suora", "direct", "stops")):
-        return "observed"
-    return "incomplete"
-
-
-def parse_itinerary_json(itinerary: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract clean structured flight card information from Skyscanner XHR JSON item."""
-    try:
-        price_raw = itinerary.get("price", {}).get("raw")
-        formatted = itinerary.get("price", {}).get("formatted", "")
-        price_eur = float(price_raw) if price_raw is not None else None
-        if price_eur is None and formatted:
-            prices = money_values(formatted)
-            if prices:
-                price_eur = prices[0]
-
-        legs = itinerary.get("legs", [])
-        parsed_legs = []
-        for leg in legs:
-            marketing_carriers = [c.get("name") for c in leg.get("carriers", {}).get("marketing", []) if c.get("name")]
-            operating_carriers = [c.get("name") for c in leg.get("carriers", {}).get("operating", []) if c.get("name")]
-            parsed_legs.append(
-                {
-                    "departure": leg.get("departure"),
-                    "arrival": leg.get("arrival"),
-                    "duration_minutes": leg.get("durationInMinutes") or leg.get("duration"),
-                    "stop_count": leg.get("stopCount", 0),
-                    "carriers": marketing_carriers or operating_carriers,
-                    "operating_carriers": operating_carriers,
-                }
-            )
-
-        deal_options = itinerary.get("pricingOptions", [])
-        deals = []
-        for opt in deal_options:
-            agent = opt.get("agentName")
-            if not agent and opt.get("agents"):
-                agent = opt["agents"][0].get("name")
-            opt_price = opt.get("price", {}).get("raw")
-            if opt_price is not None:
-                try:
-                    val = float(opt_price)
-                    if price_eur is None or val < price_eur:
-                        price_eur = val
-                except (ValueError, TypeError):
-                    pass
-            if agent and len(deals) < 5:
-                deals.append({"seller": agent, "price_eur": opt_price})
-
-        return {
-            "price_eur": price_eur,
-            "legs": parsed_legs,
-            "deals_count": len(deal_options),
-            "sample_deals": deals,
-        }
-    except Exception:
-        return None
-
-
-def extract_from_xhr_payloads(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract all valid flight itineraries from captured Skyscanner XHR payloads."""
-    results: list[dict[str, Any]] = []
-    for data in payloads:
-        raw_itineraries = None
-        if isinstance(data, dict):
-            if "itineraries" in data and isinstance(data["itineraries"], dict):
-                raw_itineraries = data["itineraries"].get("results")
-            elif "content" in data and isinstance(data["content"], dict):
-                results_dict = data["content"].get("results", {})
-                if isinstance(results_dict, dict) and "itineraries" in results_dict:
-                    raw_itins = results_dict["itineraries"]
-                    raw_itineraries = list(raw_itins.values()) if isinstance(raw_itins, dict) else raw_itins
-
-        if isinstance(raw_itineraries, list):
-            for item in raw_itineraries:
-                if isinstance(item, dict):
-                    parsed = parse_itinerary_json(item)
-                    if parsed and parsed.get("price_eur") is not None:
-                        results.append(parsed)
-
-    results.sort(key=lambda x: x["price_eur"] if x["price_eur"] is not None else float("inf"))
-    return results
-
+NEEDS_HUMAN = {"blocked", "user_action_required"}
 
 async def extract_dom_candidate_cards(page: Page) -> list[str]:
     """Fallback extraction of visible flight cards in the rendered DOM."""
@@ -235,146 +71,42 @@ async def extract_dom_candidate_cards(page: Page) -> list[str]:
     return cards
 
 
-def make_observation(
-    *,
-    origin: str,
-    destination: str,
-    departure: dt.date,
-    return_date: dt.date,
-    page_url: str,
-    page_text: str,
-    xhr_candidates: list[dict[str, Any]],
-    dom_candidates: list[str],
-) -> dict[str, Any]:
-    """Construct structured, persistent observation dictionary."""
-    status = page_status(page_url, page_text)
-
-    observed_prices: list[float] = []
-    tab_price = cheapest_tab_price(page_text)
-    if tab_price is not None:
-        observed_prices.append(tab_price)
-
-    for c in xhr_candidates:
-        p = c.get("price_eur")
-        if p is not None:
-            observed_prices.append(float(p))
-
-    for block in dom_candidates:
-        observed_prices.extend(money_values(block))
-
-    if not observed_prices and status == "observed":
-        observed_prices.extend(money_values(page_text))
-
-    lowest_price: float | None = min(observed_prices) if observed_prices else None
-
-    return {
-        "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "source": "Skyscanner UI",
-        "origin": origin,
-        "destination": destination,
-        "departure_date": departure.isoformat(),
-        "return_date": return_date.isoformat(),
-        "stay_nights": (return_date - departure).days,
-        "status": status,
-        "lowest_observed_price_eur": lowest_price,
-        "protection_label": "not_flagged_by_skyscanner",
-        "seller_confirmation_required": True,
-        "itinerary_count": len(xhr_candidates) or len(dom_candidates),
-        "candidate_cards": xhr_candidates[:20] if xhr_candidates else [
-            {
-                "raw_text": block,
-                "observed_prices_eur": money_values(block),
-                "duration_minutes": duration_minutes(block),
-            }
-            for block in dom_candidates[:20]
-        ],
-        "notes": [
-            "Read from the rendered Skyscanner page & unified-search API; fares are volatile.",
-            "No booking, checkout, or affiliate handoff was executed.",
-            "Always verify baggage allowance and transfer connection terms with chosen seller.",
-        ],
-    }
-
-
 def failed_observation(
     *, origin: str, destination: str, departure: dt.date, return_date: dt.date, error: Exception
 ) -> dict[str, Any]:
     """Record a failure observation so the matrix run continues gracefully."""
-    return {
-        "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "source": "Skyscanner UI",
-        "origin": origin,
-        "destination": destination,
-        "departure_date": departure.isoformat(),
-        "return_date": return_date.isoformat(),
-        "stay_nights": (return_date - departure).days,
-        "status": "error",
-        "lowest_observed_price_eur": None,
-        "protection_label": "unknown",
-        "seller_confirmation_required": True,
-        "itinerary_count": 0,
-        "candidate_cards": [],
-        "error": f"{type(error).__name__}: {error}",
-        "notes": ["The query failed; this pair should be retried."],
-    }
+    return reporting.error_observation(
+        source=SOURCE,
+        origin=origin,
+        destination=destination,
+        departure=departure,
+        return_date=return_date,
+        error=error,
+        note="The query failed; this pair should be retried.",
+        extra={"itinerary_count": 0},
+    )
 
 
 def save_observation(results_dir: Path, observation: dict[str, Any]) -> Path:
-    results_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{observation['departure_date']}_{observation['return_date']}.json"
-    path = results_dir / filename
-    path.write_text(json.dumps(observation, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    return reporting.save_observation(results_dir, observation)
 
 
 def write_daily_report(
-    results_dir: Path,
-    observations: list[dict[str, Any]],
-    reference_price: float | None = None,
+    results_dir: Path, observations: list[dict[str, Any]]
 ) -> tuple[Path, Path]:
-    """Write standardized daily summary CSV and JSON reports."""
-    results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
-    rows = sorted(observations, key=lambda item: (item["departure_date"], item["return_date"]))
-
-    report = {
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "source": "Skyscanner UI",
-        "total_pairs_scanned": len(rows),
-        "observed_pairs": sum(1 for r in rows if r.get("status") == "observed"),
-        "observations": rows,
-    }
-    json_path = results_dir / f"daily_fare_report_skyscanner_{stamp}.json"
-    csv_path = results_dir / f"daily_fare_report_skyscanner_{stamp}.csv"
-
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    with csv_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=(
-                "departure_date",
-                "return_date",
-                "stay_nights",
-                "status",
-                "lowest_observed_price_eur",
-                "itinerary_count",
-                "fetched_at",
-            ),
-        )
-        writer.writeheader()
-        writer.writerows(
-            {
-                "departure_date": item.get("departure_date"),
-                "return_date": item.get("return_date"),
-                "stay_nights": item.get("stay_nights"),
-                "status": item.get("status"),
-                "lowest_observed_price_eur": item.get("lowest_observed_price_eur"),
-                "itinerary_count": item.get("itinerary_count", len(item.get("candidate_cards", []))),
-                "fetched_at": item.get("fetched_at"),
-            }
-            for item in rows
-        )
-    return json_path, csv_path
+    """Write the day's Skyscanner JSON and CSV roll-up."""
+    return reporting.write_daily_report(
+        results_dir,
+        observations,
+        source=SOURCE,
+        stem=REPORT_STEM,
+        fieldnames=SKYSCANNER_REPORT_FIELDS,
+        fallbacks={
+            "itinerary_count": lambda item: item.get(
+                "itinerary_count", len(item.get("candidate_cards", []))
+            )
+        },
+    )
 
 
 async def scan_pair(
@@ -581,9 +313,9 @@ async def run(args: argparse.Namespace) -> int:
     if browser_executable:
         print(f"[Skyscanner] Using installed browser: {browser_executable}")
 
-    today_stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
-    report_json: Path = results_dir / f"daily_fare_report_skyscanner_{today_stamp}.json"
-    report_csv: Path = results_dir / f"daily_fare_report_skyscanner_{today_stamp}.csv"
+    stamp = reporting.today_stamp()
+    report_json: Path = results_dir / f"{REPORT_STEM}_{stamp}.json"
+    report_csv: Path = results_dir / f"{REPORT_STEM}_{stamp}.csv"
     observations: list[dict[str, Any]] = []
 
     async with async_playwright() as playwright:
@@ -614,7 +346,7 @@ async def run(args: argparse.Namespace) -> int:
                         cached = json.loads(pair_file.read_text(encoding="utf-8"))
                         if (
                             cached.get("status") == "observed"
-                            and cached.get("fetched_at", "").startswith(today_stamp)
+                            and str(cached.get("fetched_at", "")).startswith(stamp)
                             and cached.get("origin") == args.origin
                             and cached.get("destination") == args.dest
                         ):
@@ -623,7 +355,7 @@ async def run(args: argparse.Namespace) -> int:
                                 f"(cached today: €{cached.get('lowest_observed_price_eur')})"
                             )
                             observations.append(cached)
-                            report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
+                            report_json, report_csv = write_daily_report(results_dir, observations)
                             continue
                     except Exception:
                         pass
@@ -653,7 +385,7 @@ async def run(args: argparse.Namespace) -> int:
                             error=error,
                         )
 
-                    if observation["status"] not in {"blocked", "user_action_required"}:
+                    if observation["status"] not in NEEDS_HUMAN:
                         break
 
                     if attempt <= max_retries:
@@ -668,7 +400,7 @@ async def run(args: argparse.Namespace) -> int:
 
                 saved = save_observation(results_dir, observation)
                 observations.append(observation)
-                report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
+                report_json, report_csv = write_daily_report(results_dir, observations)
                 print(f"  {observation['status']}; lowest observed: €{observation['lowest_observed_price_eur']}; saved {saved.name}")
 
                 if index < len(pairs):
@@ -678,7 +410,7 @@ async def run(args: argparse.Namespace) -> int:
                     await page.wait_for_timeout(pause_s * 1000)
 
             # Final sweep pass: retry any remaining flagged pairs once more
-            flagged = [obs for obs in observations if obs.get("status") in {"blocked", "user_action_required"}]
+            flagged = [obs for obs in observations if obs.get("status") in NEEDS_HUMAN]
             if flagged:
                 print(f"\n[Skyscanner] Starting final retry sweep for {len(flagged)} flagged pair(s)...", flush=True)
                 for sw_idx, fl in enumerate(flagged, 1):
@@ -696,12 +428,12 @@ async def run(args: argparse.Namespace) -> int:
                             poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
                             challenge_timeout_seconds=args.challenge_timeout_seconds,
                         )
-                        if sw_obs["status"] not in {"blocked", "user_action_required"}:
+                        if sw_obs["status"] not in NEEDS_HUMAN:
                             save_observation(results_dir, sw_obs)
                             for i, obs_item in enumerate(observations):
                                 if obs_item.get("departure_date") == fl["departure_date"] and obs_item.get("return_date") == fl["return_date"]:
                                     observations[i] = sw_obs
-                            report_json, report_csv = write_daily_report(results_dir, observations, args.reference_price)
+                            report_json, report_csv = write_daily_report(results_dir, observations)
                             print(f"  [Sweep Recovered!] {sw_obs['status']}; lowest observed: €{sw_obs['lowest_observed_price_eur']}")
                     except Exception as sw_err:
                         print(f"  [Sweep Failed]: {sw_err}", file=sys.stderr)
@@ -751,14 +483,11 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--profile-dir", default=str(cfg.skyscanner.resolved_profile_dir()))
     res.add_argument("--results-dir", default=str(cfg.skyscanner.resolved_results_dir()))
     res.add_argument("--browser-executable", default=cfg.execution.browser_executable, help="Custom path to Chrome/Edge executable")
-    res.add_argument("--reference-price", type=float, default=cfg.skyscanner.reference_price, help="Expected € price for reference pair")
     return res
 
 
 def main() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+    configure_stdio()
     args = parser().parse_args()
     try:
         raise SystemExit(asyncio.run(run(args)))
