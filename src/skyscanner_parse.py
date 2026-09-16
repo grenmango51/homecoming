@@ -50,6 +50,7 @@ def flight_search_url(
         f"{base_url}/transport/flights/{orig}/{dest}/{dep_str}/{ret_str}/"
         f"?adultsv2=1&cabinclass=economy&childrenv2=&ref=home&rtn=1"
         f"&outboundaltsenabled=false&inboundaltsenabled=false&preferdirects=false"
+        f"&sortby=cheapest"
     )
 
 
@@ -192,21 +193,27 @@ def make_observation(
 
     observed_prices: list[float] = []
     tab_price = cheapest_tab_price(page_text)
-    if tab_price is not None:
+    if tab_price is not None and tab_price >= 200.0:
         observed_prices.append(tab_price)
 
     for c in xhr_candidates:
         p = c.get("price_eur")
-        if p is not None:
+        if p is not None and float(p) >= 200.0:
             observed_prices.append(float(p))
 
     for block in dom_candidates:
-        observed_prices.extend(money_values(block))
+        for p in money_values(block):
+            if p >= 200.0:
+                observed_prices.append(p)
 
     if not observed_prices and status == "observed":
-        observed_prices.extend(money_values(page_text))
+        for p in money_values(page_text):
+            if p >= 200.0:
+                observed_prices.append(p)
 
     lowest_price: float | None = min(observed_prices) if observed_prices else None
+    if lowest_price is None and status == "observed":
+        status = "incomplete"
 
     return {
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),

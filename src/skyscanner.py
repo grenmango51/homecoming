@@ -50,18 +50,26 @@ NEEDS_HUMAN = {"blocked", "user_action_required"}
 async def extract_dom_candidate_cards(page: Page) -> list[str]:
     """Fallback extraction of visible flight cards in the rendered DOM."""
     locators = page.locator(
-        "[data-testid='flight-card'], [data-testid='itinerary-card'], [role='listitem'], div[class*='FlightCard']"
+        "div[class*='Ticket'], div[class*='Card'], [aria-label*='Flight option'], [aria-label*='Lentovaihtoehto'], [data-testid='flight-card'], [data-testid='itinerary-card'], [data-testid*='itinerary']"
     )
     count = await locators.count()
     cards: list[str] = []
     seen: set[str] = set()
+    flight_indicators = (
+        "stop", "vaihto", "vaihtoa", "välilasku", "suora", "direct",
+        "min", "hr", "tuntia", "tunti", "hel", "han", "lentovaihtoehto", "flight option"
+    )
     for i in range(min(count, 40)):
         try:
             txt = await locators.nth(i).inner_text()
             compact = " ".join(txt.split())
             if len(compact) < 20:
                 continue
-            if money_values(compact):
+            lower = compact.lower()
+            if not any(term in lower for term in flight_indicators):
+                continue
+            prices = [p for p in money_values(compact) if p >= 200.0]
+            if prices:
                 key = compact[:100].lower()
                 if key not in seen:
                     seen.add(key)
@@ -192,7 +200,7 @@ async def scan_pair(
 
         # Switch to "Cheapest" / "Halvin" tab early so the view prioritizes the lowest fares
         try:
-            cheapest_tab = page.locator("button:has-text('Cheapest'), button:has-text('Halvin'), [data-testid='cheapest_tab'], [aria-label*='Halvin'], [aria-label*='Cheapest']")
+            cheapest_tab = page.locator("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]")
             if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
                 await cheapest_tab.first.click(timeout=1500)
         except Exception:
@@ -207,12 +215,12 @@ async def scan_pair(
                 elapsed = asyncio.get_event_loop().time() - start_poll
                 progress_bar = page.locator("[role='progressbar'], [class*='ProgressBar'], [class*='loading-bar'], div[aria-label*='Loading']")
                 has_progress = await progress_bar.count() > 0 and await progress_bar.first.is_visible()
-                if not has_progress and elapsed >= 15:
+                if not has_progress and elapsed >= 25:
                     break
 
         # Re-ensure "Cheapest" tab is active after all results loaded
         try:
-            cheapest_tab = page.locator("button:has-text('Cheapest'), button:has-text('Halvin'), [data-testid='cheapest_tab'], [aria-label*='Halvin'], [aria-label*='Cheapest']")
+            cheapest_tab = page.locator("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]")
             if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
                 await cheapest_tab.first.click(timeout=1500)
                 await page.wait_for_timeout(1000)
@@ -333,8 +341,8 @@ async def run(args: argparse.Namespace) -> int:
             ],
         )
         await context.add_cookies([
-            {"name": "ssculture", "value": "locale:::en-GB&market:::FI&currency:::EUR", "domain": ".skyscanner.net", "path": "/"},
-            {"name": "ssculture", "value": "locale:::en-GB&market:::FI&currency:::EUR", "domain": ".skyscanner.fi", "path": "/"},
+            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.net", "path": "/"},
+            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.fi", "path": "/"},
         ])
         page = context.pages[0] if context.pages else await context.new_page()
 
