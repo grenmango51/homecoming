@@ -1,0 +1,31 @@
+[project]
+name = "flight-finder"
+version = "0.1.0"
+description = "Google Flights and Skyscanner fare scanner with cross-platform and point-of-sale arbitrage analysis"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # long lines are mostly URLs and report strings
+    "B008",    # argparse/dataclass defaults are evaluated once by design
+    "UP017",   # dt.timezone.utc reads more explicitly than dt.UTC
+    "SIM102",  # nested ifs in the scrapers document distinct page conditions
+    "SIM103",  # explicit early returns are clearer in the classifiers
+    "SIM105",  # try/except/pass reads better than contextlib.suppress in async page code
+    "SIM108",  # ternaries hurt readability in the report builders
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]

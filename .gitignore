@@ -6,3 +6,6 @@ flight_results*/
 __pycache__/
 .venv/
 *.pyc
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
