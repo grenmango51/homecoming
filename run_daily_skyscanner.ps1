@@ -24,8 +24,8 @@ Write-Host " Starting Skyscanner Daily Fare Scan ($Today)" -ForegroundColor Cyan
 Write-Host " Log file: $LogFile" -ForegroundColor DarkGray
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# Run find_flights_skyscanner.py with --skip-existing and 4s delay
-& $VenvPython find_flights_skyscanner.py --skip-existing --delay-seconds 4 @args *>&1 | Tee-Object -FilePath $LogFile
+# Run find_flights_skyscanner.py with --skip-existing and config delay
+& $VenvPython find_flights_skyscanner.py --skip-existing @args *>&1 | Tee-Object -FilePath $LogFile
 
 $ScanExitCode = $LASTEXITCODE
 if ($ScanExitCode -eq 0) {
