@@ -50,6 +50,7 @@ class PageStatusTests(unittest.TestCase):
         self.assertTrue(is_challenge_page("https://skyscanner.net/sttc/px/captcha", "anything"))
         self.assertTrue(is_challenge_page("https://skyscanner.net", "oletko oikea henkilö vai robotti"))
         self.assertTrue(is_challenge_page("https://skyscanner.net", "Press & Hold"))
+        self.assertTrue(is_challenge_page("https://skyscanner.net", "Are you a person or a robot?"))
         self.assertFalse(is_challenge_page("https://skyscanner.net/flights", "Cheapest from €782"))
 
 

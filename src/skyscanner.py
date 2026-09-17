@@ -130,6 +130,7 @@ async def scan_pair(
 ) -> dict[str, Any]:
     """Navigate to Skyscanner, handle consent/challenges gracefully, and extract flight fares."""
     captured_payloads: list[dict[str, Any]] = []
+    search_complete_event = asyncio.Event()
 
     async def handle_response(response: Response) -> None:
         try:
@@ -138,6 +139,17 @@ async def scan_pair(
                 if response.status == 200 and "application/json" in response.headers.get("content-type", ""):
                     body = await response.json()
                     captured_payloads.append(body)
+                    # Detect backend scan completion signal in XHR payload
+                    status = body.get("status")
+                    context_obj = body.get("context") or body.get("itineraries", {}).get("context", {})
+                    ctx_status = context_obj.get("status") if isinstance(context_obj, dict) else None
+                    query_status = body.get("query_status") or body.get("searchStatus")
+                    if any(
+                        str(s).upper() in ("COMPLETE", "COMPLETED", "FINISHED")
+                        for s in (status, ctx_status, query_status)
+                        if s
+                    ):
+                        search_complete_event.set()
         except Exception:
             pass
 
@@ -183,17 +195,21 @@ async def scan_pair(
             else:
                 print("\n[TIMEOUT] Challenge was not resolved within allotted time.", file=sys.stderr, flush=True)
 
-        # Wait for flight results to settle
+        # Wait for initial search view or challenge to appear
         try:
             await page.wait_for_function(
                 """() => {
-                    const text = document.body?.innerText || '';
-                    if (/results|tulosta|halvin|cheapest|direct|stops/i.test(text)) {
+                    const text = document.body ? document.body.innerText.toLowerCase() : '';
+                    if (text.includes('person or a robot') || text.includes('robotti') || text.includes('press & hold')) {
                         return true;
                     }
-                    return false;
+                    const pb = document.querySelector("[role='progressbar'], [class*='ProgressBar'], [class*='BpkProgress']");
+                    const cards = document.querySelector("div[class*='Ticket'], div[class*='Card'], [data-testid*='itinerary'], [data-testid='flight-card']");
+                    const skeletons = document.querySelector("[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton']");
+                    const tabs = document.querySelector("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i]");
+                    return !!(pb || cards || skeletons || tabs || /results|tulosta|halvin|cheapest|direct|stops/i.test(text));
                 }""",
-                timeout=timeout_ms,
+                timeout=min(timeout_ms, 15000),
             )
         except Exception:
             pass
@@ -206,31 +222,102 @@ async def scan_pair(
         except Exception:
             pass
 
-        # Wait for Skyscanner's background polling to complete (up to poll_wait_seconds)
-        # to allow slower OTAs and budget carriers to return their fares.
-        if poll_wait_seconds > 0:
-            start_poll = asyncio.get_event_loop().time()
-            while (asyncio.get_event_loop().time() - start_poll) < poll_wait_seconds:
-                await page.wait_for_timeout(2000)
-                elapsed = asyncio.get_event_loop().time() - start_poll
-                progress_bar = page.locator("[role='progressbar'], [class*='ProgressBar'], [class*='loading-bar'], div[aria-label*='Loading']")
-                has_progress = await progress_bar.count() > 0 and await progress_bar.first.is_visible()
-                if not has_progress and elapsed >= 25:
-                    break
+        # Dynamic event-driven wait for the EXACT sign that all prices are scanned.
+        # Skyscanner visual completion signs:
+        # A) Progress bar reaches 100% (aria-valuenow == 100 or aria-valuenow == aria-valuemax, or Checked X of X)
+        # B) Progress bar disappears / hides after scan
+        # C) All shimmer/skeleton placeholders have vanished (count === 0)
+        # D) Flight cards or confirmed result state is rendered in the DOM
+        # E) Conductor / unified-search XHR reports completion status
+        # Scrapes the very millisecond the completion sign appears with ZERO second-guessing.
+        try:
+            completion_waiter = page.wait_for_function(
+                """() => {
+                    const text = document.body ? document.body.innerText.toLowerCase() : '';
+                    if (text.includes('person or a robot') || text.includes('robotti') || text.includes('press & hold')) {
+                        return 'challenge';
+                    }
+
+                    // 1. Check progress bar state
+                    const pb = document.querySelector("[role='progressbar'], [class*='ProgressBar'], [class*='progress-bar'], [class*='BpkProgress']");
+                    const isPbVisible = pb && (pb.offsetParent !== null || window.getComputedStyle(pb).display !== 'none');
+
+                    if (isPbVisible) {
+                        const val = pb.getAttribute('aria-valuenow');
+                        const max = pb.getAttribute('aria-valuemax') || '100';
+                        if (val && max && Number(val) >= Number(max)) {
+                            return 'progress_100';
+                        }
+                        const label = pb.getAttribute('aria-label') || '';
+                        const match = label.match(/(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/i);
+                        if (match && Number(match[1]) >= Number(match[2])) {
+                            return 'progress_all_providers';
+                        }
+                        // Progress bar is actively scanning
+                        return false;
+                    }
+
+                    // 2. When progress bar is no longer visible, verify results settled
+                    const cards = document.querySelectorAll(
+                        "div[class*='Ticket'], div[class*='Card'], [data-testid*='itinerary'], [data-testid='flight-card']"
+                    );
+                    const skeletons = document.querySelectorAll(
+                        "[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton'], [data-testid*='skeleton']"
+                    );
+
+                    // Visual sign: cards exist and zero skeletons remain
+                    if (cards.length > 0 && skeletons.length === 0) {
+                        return 'results_settled';
+                    }
+
+                    // Empty results confirmed
+                    if (text.includes('ei tuloksia') || text.includes('no results found') || text.includes('no flights found') || text.includes('mitään ei löytynyt')) {
+                        return 'no_results';
+                    }
+
+                    return false;
+                }""",
+                timeout=timeout_ms,
+            )
+
+            done, pending = await asyncio.wait(
+                [
+                    asyncio.create_task(completion_waiter),
+                    asyncio.create_task(search_complete_event.wait()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+
+            # If XHR finished first, ensure DOM skeletons have settled
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const skeletons = document.querySelectorAll("[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton'], [data-testid*='skeleton']");
+                        return skeletons.length === 0;
+                    }""",
+                    timeout=3000,
+                )
+            except Exception:
+                pass
+
+        except Exception:
+            pass
 
         # Re-ensure "Cheapest" tab is active after all results loaded
         try:
             cheapest_tab = page.locator("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]")
             if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
                 await cheapest_tab.first.click(timeout=1500)
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
         except Exception:
             pass
 
         # Scroll down slightly to trigger hydration of DOM cards
         try:
             await page.evaluate("window.scrollBy(0, 600)")
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(500)
         except Exception:
             pass
 

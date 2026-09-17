@@ -78,6 +78,8 @@ def is_challenge_page(url: str, text: str) -> bool:
             "verify you are human",
             "unusual traffic",
             "oletko oikea henkilö vai robotti",
+            "person or a robot",
+            "are you a person",
         )
     ):
         return True
