@@ -22,7 +22,7 @@ class UrlTests(unittest.TestCase):
 
     def test_round_trip_url(self) -> None:
         url = flight_search_url("HEL", "HAN", dt.date(2026, 12, 9), dt.date(2027, 1, 9))
-        self.assertTrue(url.startswith("https://www.skyscanner.net/transport/flights/hel/han/261209/270109/"))
+        self.assertTrue(url.startswith("https://www.skyscanner.fi/transport/flights/hel/han/261209/270109/"))
         self.assertIn("adultsv2=1", url)
         self.assertIn("cabinclass=economy", url)
 

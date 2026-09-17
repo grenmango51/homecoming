@@ -12,7 +12,7 @@ from typing import Any
 
 from src.common import PRICE_RE, PRICE_SUFFIX_RE, duration_minutes, parse_numeric_price
 
-SKYSCANNER_BASE = "https://www.skyscanner.net"
+SKYSCANNER_BASE = "https://www.skyscanner.fi"
 SOURCE = "Skyscanner UI"
 
 CHEAPEST_TAB_RE = re.compile(
@@ -49,8 +49,8 @@ def flight_search_url(
     return (
         f"{base_url}/transport/flights/{orig}/{dest}/{dep_str}/{ret_str}/"
         f"?adultsv2=1&cabinclass=economy&childrenv2=&ref=home&rtn=1"
-        f"&outboundaltsenabled=false&inboundaltsenabled=false&preferdirects=false"
-        f"&sortby=cheapest"
+        f"&preferdirects=false&outboundaltsenabled=false&inboundaltsenabled=false"
+        f"&sortby=cheapest&currency=EUR"
     )
 
 
