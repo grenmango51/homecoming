@@ -154,6 +154,81 @@ class FlightComparisonTests(unittest.TestCase):
             self.assertEqual(data["overall_lowest_fare_eur"], 782.0)
             self.assertEqual(data["max_skyscanner_saving_eur"], 18.0)
 
+    def test_compare_records_with_google_se_winner(self) -> None:
+        google_fi = {
+            ("2026-12-09", "2027-01-09"): {
+                "departure_date": "2026-12-09",
+                "return_date": "2027-01-09",
+                "stay_nights": 31,
+                "status": "observed",
+                "price_eur": 800.0,
+            }
+        }
+        google_se = {
+            ("2026-12-09", "2027-01-09"): {
+                "departure_date": "2026-12-09",
+                "return_date": "2027-01-09",
+                "stay_nights": 31,
+                "status": "observed",
+                "price_eur": 775.0,
+            }
+        }
+        skyscanner = {
+            ("2026-12-09", "2027-01-09"): {
+                "departure_date": "2026-12-09",
+                "return_date": "2027-01-09",
+                "stay_nights": 31,
+                "status": "observed",
+                "price_eur": 785.0,
+            }
+        }
+        comps = cf.compare_records(google_fi, skyscanner, google_se_data=google_se)
+        self.assertEqual(len(comps), 1)
+        c = comps[0]
+        self.assertEqual(c["winner"], "Google Flights (SE)")
+        self.assertEqual(c["cheapest_price_eur"], 775.0)
+        self.assertEqual(c["savings_eur"], 10.0)  # 785 - 775
+        self.assertEqual(c["google_se_price_eur"], 775.0)
+
+        # Verify 3-way table rendering
+        table = cf.render_table(comps)
+        self.assertIn("Google FI (€)", table)
+        self.assertIn("Google SE (€)", table)
+        self.assertIn("€775", table)
+        self.assertIn("Google Flights (SE)", table)
+        self.assertIn("-€10 (SE)", table)
+
+    def test_write_comparison_reports_with_se(self) -> None:
+        comps = [
+            {
+                "departure_date": "2026-12-09",
+                "return_date": "2027-01-09",
+                "stay_nights": 31,
+                "google_price_eur": 800.0,
+                "google_se_price_eur": 775.0,
+                "skyscanner_price_eur": 785.0,
+                "cheapest_price_eur": 775.0,
+                "winner": "Google Flights (SE)",
+                "skyscanner_savings_eur": 15.0,
+                "savings_eur": 10.0,
+                "savings_pct": 1.3,
+                "google_status": "observed",
+                "google_se_status": "observed",
+                "skyscanner_status": "observed",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            csv_path, json_path = cf.write_comparison_reports(Path(td), comps, stamp="2026-09-14")
+            self.assertTrue(csv_path.is_file())
+            csv_text = csv_path.read_text(encoding="utf-8")
+            self.assertIn("google_se_price_eur", csv_text)
+            self.assertIn("775.0", csv_text)
+
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["google_se_cheaper_count"], 1)
+            self.assertEqual(data["max_google_se_saving_eur"], 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

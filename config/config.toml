@@ -27,8 +27,8 @@ browser_executable = ""
 # Whether to run Google Flights in the unified execution
 enabled = true
 
-# Point of sale country code (e.g. "SE" for Sweden, "FI" for Finland, "DE" for Germany)
-gl = "FI"
+# Point of sale country code(s) (e.g. ["FI", "SE"] to scan both Finland and Sweden)
+gl = ["FI", "SE"]
 
 # Delay between page loads in seconds
 delay_seconds = 3

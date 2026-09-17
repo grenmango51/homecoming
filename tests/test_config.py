@@ -73,10 +73,21 @@ class TripFileTests(unittest.TestCase):
         self.assertIsNone(resolve_trip_file("NOPE.toml", Path(".")))
 
     def test_every_shipped_trip_config_generates_pairs(self) -> None:
-        for name in ("HEL_HAN.toml", "PHL_HAN.toml", "SIN_HAN.toml", "HEL_BRU.toml", "AMS_HEL.toml"):
+        for name in ("HEL_HAN.toml", "PHL_HAN.toml", "SIN_HAN.toml", "HEL_BRU.toml", "AMS_HEL.toml", "HEL_AMS.toml"):
             with self.subTest(trip=name):
                 cfg = load_config(trip_path=name)
                 self.assertGreater(len(cfg.trip.get_search_pairs()), 0, f"{name} produced no pairs")
+
+    def test_modular_hel_ams_config(self) -> None:
+        cfg = load_config(trip_path="HEL_AMS.toml")
+        self.assertEqual(cfg.trip.origin, "HEL")
+        self.assertEqual(cfg.trip.dest, "AMS")
+        self.assertEqual(cfg.trip.min_stay_nights, 21)
+        self.assertEqual(cfg.trip_file, "HEL_AMS.toml")
+        self.assertEqual(len(cfg.trip.get_search_pairs()), 8)
+        self.assertEqual(cfg.google_flights.results_dir, "flight_results_HEL_AMS")
+        self.assertEqual(cfg.skyscanner.results_dir, "flight_results_skyscanner_HEL_AMS")
+        self.assertEqual(cfg.comparison.output_dir, "flight_results_HEL_AMS")
 
 
 class CustomConfigTests(unittest.TestCase):
@@ -134,6 +145,25 @@ poll_wait_seconds = 45
     def test_missing_config_file_falls_back_to_defaults(self) -> None:
         cfg = load_config(Path("/nonexistent/config.toml"))
         self.assertEqual(cfg.trip.origin, "HEL")
+
+    def test_multi_pos_gl_config(self) -> None:
+        path = write_toml('[google_flights]\ngl = ["FI", "SE"]\n')
+        try:
+            cfg = load_config(path)
+            self.assertEqual(cfg.google_flights.gl_list, ["FI", "SE"])
+            self.assertEqual(cfg.google_flights.resolved_results_dir_for_gl("FI").name, "flight_results")
+            self.assertEqual(cfg.google_flights.resolved_results_dir_for_gl("SE").name, "flight_results_SE")
+        finally:
+            path.unlink()
+
+    def test_single_and_comma_separated_gl(self) -> None:
+        path = write_toml('[google_flights]\ngl = "se, fi"\n')
+        try:
+            cfg = load_config(path)
+            self.assertEqual(cfg.google_flights.gl_list, ["SE", "FI"])
+        finally:
+            path.unlink()
+
 
 
 class SearchPairTests(unittest.TestCase):

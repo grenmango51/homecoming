@@ -107,7 +107,7 @@ async def orchestrate(
     print(f" Min Stay:         {cfg.trip.min_stay_nights} nights")
     print(f" Strategy:         {cfg.execution.strategy.upper()}")
     print(f" Skip Existing:    {cfg.execution.skip_existing}")
-    print(f" Google Flights:   {'ENABLED' if cfg.google_flights.enabled else 'DISABLED'}")
+    print(f" Google Flights:   {'ENABLED (' + ', '.join(cfg.google_flights.gl_list) + ')' if cfg.google_flights.enabled else 'DISABLED'}")
     print(f" Skyscanner:       {'ENABLED' if cfg.skyscanner.enabled else 'DISABLED'}")
     print("=" * 65 + "\n")
 

@@ -92,7 +92,27 @@ class ScraperConfig:
 
 @dataclass
 class GoogleFlightsConfig(ScraperConfig):
-    gl: str = "FI"  # Point of sale country code
+    gl: str | list[str] = field(default_factory=lambda: ["FI", "SE"])
+
+    @property
+    def gl_list(self) -> list[str]:
+        """Normalize gl to a list of uppercase country codes."""
+        if isinstance(self.gl, list):
+            res = [str(x).strip().upper() for x in self.gl if str(x).strip()]
+            return res if res else ["FI"]
+        if isinstance(self.gl, str):
+            res = [x.strip().upper() for x in self.gl.split(",") if x.strip()]
+            return res if res else ["FI"]
+        return ["FI"]
+
+    def resolved_results_dir_for_gl(self, gl: str, root: Path = PROJECT_ROOT) -> Path:
+        """Resolve results directory for a specific Point of Sale code."""
+        code = gl.strip().upper()
+        primary = self.gl_list[0] if self.gl_list else "FI"
+        if code == primary or code == "FI":
+            return self.resolved_results_dir(root)
+        return (root / f"{self.results_dir}_{code}").resolve()
+
 
 
 @dataclass
@@ -158,17 +178,17 @@ def _resolve_trip(
     if reference:
         resolved = resolve_trip_file(reference, config_path.parent)
         if resolved:
-            return _load_trip_table(resolved), resolved.name
+            return _read_toml(resolved), resolved.name
         if not trip_path and "trip" in data:
-            return data["trip"], None
+            return data, None
         return {}, None
 
     if "trip" in data:
-        return data["trip"], None
+        return data, None
 
     default = resolve_trip_file(DEFAULT_TRIP_FILE, config_path.parent)
     if default:
-        return _load_trip_table(default), default.name
+        return _read_toml(default), default.name
     return {}, None
 
 
@@ -180,11 +200,18 @@ def load_config(
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
     data = _read_toml(path) if path.is_file() else {}
 
-    trip_data, trip_filename = _resolve_trip(data, path, trip_path)
-    exec_data = data.get("execution", {})
-    gf_data = data.get("google_flights", {})
-    ss_data = data.get("skyscanner", {})
-    comp_data = data.get("comparison", {})
+    raw_trip_data, trip_filename = _resolve_trip(data, path, trip_path)
+    trip_data = raw_trip_data.get("trip", raw_trip_data) if isinstance(raw_trip_data, dict) else {}
+
+    t_exec = raw_trip_data.get("execution", {}) if isinstance(raw_trip_data, dict) and isinstance(raw_trip_data.get("execution"), dict) else {}
+    t_gf = raw_trip_data.get("google_flights", {}) if isinstance(raw_trip_data, dict) and isinstance(raw_trip_data.get("google_flights"), dict) else {}
+    t_ss = raw_trip_data.get("skyscanner", {}) if isinstance(raw_trip_data, dict) and isinstance(raw_trip_data.get("skyscanner"), dict) else {}
+    t_comp = raw_trip_data.get("comparison", {}) if isinstance(raw_trip_data, dict) and isinstance(raw_trip_data.get("comparison"), dict) else {}
+
+    exec_data = {**data.get("execution", {}), **t_exec}
+    gf_data = {**data.get("google_flights", {}), **t_gf}
+    ss_data = {**data.get("skyscanner", {}), **t_ss}
+    comp_data = {**data.get("comparison", {}), **t_comp}
 
     browser_executable = exec_data.get("browser_executable") or None
     if isinstance(browser_executable, str):
@@ -213,7 +240,11 @@ def load_config(
         ),
         google_flights=GoogleFlightsConfig(
             enabled=bool(gf_data.get("enabled", True)),
-            gl=str(gf_data.get("gl", "FI")).strip().upper(),
+            gl=(
+                [str(x).strip().upper() for x in gf_data["gl"] if str(x).strip()]
+                if isinstance(gf_data.get("gl"), list)
+                else str(gf_data.get("gl", "FI")).strip().upper()
+            ),
             delay_seconds=int(gf_data.get("delay_seconds", 3)),
             timeout_seconds=int(gf_data.get("timeout_seconds", 30)),
             profile_dir=str(gf_data.get("profile_dir", ".browser-profile")),

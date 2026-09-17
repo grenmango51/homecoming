@@ -188,25 +188,30 @@ async def run(args: argparse.Namespace) -> int:
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")
 
-    gl = args.gl or cfg.google_flights.gl or "FI"
+    if args.gl:
+        if "," in args.gl:
+            gl_list = [x.strip().upper() for x in args.gl.split(",") if x.strip()]
+        else:
+            gl_list = [args.gl.strip().upper()]
+    else:
+        gl_list = cfg.google_flights.gl_list
+
     profile_dir = Path(os.environ.get("GOOGLE_FLIGHTS_PROFILE_DIR", args.profile_dir)).resolve()
-    results_dir = Path(args.results_dir).resolve()
+    base_results_dir = Path(args.results_dir).resolve()
     browser_executable = resolve_browser_executable(args.browser_executable)
     profile_dir.mkdir(parents=True, exist_ok=True)
-    results_dir.mkdir(parents=True, exist_ok=True)
+    base_results_dir.mkdir(parents=True, exist_ok=True)
 
     print(
         f"[Google Flights] Scanning {len(pairs)} date pairs in a visible browser "
-        f"(Point of Sale: gl={gl}). Results: {results_dir}"
+        f"(Point of Sale: {', '.join(gl_list)}). Results: {base_results_dir}"
     )
     print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
     if browser_executable:
         print(f"[Google Flights] Using installed browser: {browser_executable}")
 
     stamp = reporting.today_stamp()
-    report_json = results_dir / f"{REPORT_STEM}_{stamp}.json"
-    report_csv = results_dir / f"{REPORT_STEM}_{stamp}.csv"
-    observations: list[dict[str, Any]] = []
+    written_reports: list[tuple[str, Path, Path]] = []
 
     async with async_playwright() as playwright:
         context = await browser.launch_google_context(
@@ -214,65 +219,86 @@ async def run(args: argparse.Namespace) -> int:
         )
         page = context.pages[0] if context.pages else await context.new_page()
         try:
-            for index, (departure, return_date) in enumerate(pairs, start=1):
-                progress = f"[{index}/{len(pairs)}] {departure} -> {return_date}"
-                pair_file = results_dir / reporting.pair_filename(departure, return_date)
+            for m_idx, current_gl in enumerate(gl_list, start=1):
+                if len(gl_list) > 1:
+                    cur_results_dir = cfg.google_flights.resolved_results_dir_for_gl(current_gl)
+                else:
+                    cur_results_dir = base_results_dir
+                cur_results_dir.mkdir(parents=True, exist_ok=True)
 
-                if args.skip_existing:
-                    cached = cached_observation(
-                        pair_file, stamp=stamp, origin=args.origin, dest=args.dest, gl=gl
-                    )
-                    if cached:
-                        print(
-                            f"[Google Flights] {progress} "
-                            f"(cached today: €{cached.get('lowest_observed_price_eur')})"
-                        )
-                        observations.append(cached)
-                        report_json, report_csv = write_daily_report(results_dir, observations)
-                        continue
-
-                print(f"[Google Flights] {progress}")
-                try:
-                    observation = await scan_pair(
-                        page,
-                        origin=args.origin,
-                        destination=args.dest,
-                        departure=departure,
-                        return_date=return_date,
-                        timeout_ms=args.timeout_seconds * 1000,
-                        gl=gl,
-                    )
-                except Exception as error:
-                    observation = failed_observation(
-                        origin=args.origin,
-                        destination=args.dest,
-                        departure=departure,
-                        return_date=return_date,
-                        error=error,
-                    )
-                    observation["page_url"] = page.url
-                    observation["visible_page_text"] = (await browser.page_text(page))[:2000]
-
-                saved = save_observation(results_dir, observation)
-                observations.append(observation)
-                report_json, report_csv = write_daily_report(results_dir, observations)
                 print(
-                    f"  {observation['status']}; lowest observed: "
-                    f"{observation['lowest_observed_price_eur']}; saved {saved.name}"
+                    f"\n[Google Flights] [{m_idx}/{len(gl_list)}] Scanning {len(pairs)} pairs "
+                    f"for POS: gl={current_gl} (Results: {cur_results_dir.name})"
                 )
+                cur_report_json = cur_results_dir / f"{REPORT_STEM}_{stamp}.json"
+                cur_report_csv = cur_results_dir / f"{REPORT_STEM}_{stamp}.csv"
+                observations: list[dict[str, Any]] = []
 
-                if observation["status"] in NEEDS_HUMAN:
+                for index, (departure, return_date) in enumerate(pairs, start=1):
+                    progress = f"[{index}/{len(pairs)}] {departure} -> {return_date}"
+                    pair_file = cur_results_dir / reporting.pair_filename(departure, return_date)
+
+                    if args.skip_existing:
+                        cached = cached_observation(
+                            pair_file, stamp=stamp, origin=args.origin, dest=args.dest, gl=current_gl
+                        )
+                        if cached:
+                            print(
+                                f"[Google Flights] {progress} "
+                                f"(cached today: €{cached.get('lowest_observed_price_eur')})"
+                            )
+                            observations.append(cached)
+                            cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
+                            continue
+
+                    print(f"[Google Flights] {progress}")
+                    try:
+                        observation = await scan_pair(
+                            page,
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=departure,
+                            return_date=return_date,
+                            timeout_ms=args.timeout_seconds * 1000,
+                            gl=current_gl,
+                        )
+                    except Exception as error:
+                        observation = failed_observation(
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=departure,
+                            return_date=return_date,
+                            error=error,
+                        )
+                        observation["gl"] = current_gl
+                        observation["page_url"] = page.url
+                        observation["visible_page_text"] = (await browser.page_text(page))[:2000]
+
+                    saved = save_observation(cur_results_dir, observation)
+                    observations.append(observation)
+                    cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
                     print(
-                        "[Google Flights] Stopping: browser needs human action. Re-run after resolving it.",
-                        file=sys.stderr,
+                        f"  {observation['status']}; lowest observed: "
+                        f"{observation['lowest_observed_price_eur']}; saved {saved.name}"
                     )
-                    return 2
-                if index < len(pairs):
+
+                    if observation["status"] in NEEDS_HUMAN:
+                        print(
+                            "[Google Flights] Stopping: browser needs human action. Re-run after resolving it.",
+                            file=sys.stderr,
+                        )
+                        return 2
+                    if index < len(pairs):
+                        await page.wait_for_timeout(args.delay_seconds * 1000)
+
+                written_reports.append((current_gl, cur_report_json, cur_report_csv))
+                if m_idx < len(gl_list):
                     await page.wait_for_timeout(args.delay_seconds * 1000)
         finally:
             await context.close()
 
-    print(f"[Google Flights] Daily report written: {report_json.name}, {report_csv.name}")
+    for gl_code, r_json, r_csv in written_reports:
+        print(f"[Google Flights] Daily report ({gl_code}) written: {r_json.name}, {r_csv.name}")
     return 0
 
 
@@ -300,7 +326,7 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--window-start", default=None if ranged else cfg.trip.window_start, help="Earliest allowed departure date")
     res.add_argument("--window-end", default=None if ranged else cfg.trip.window_end, help="Latest allowed return date")
 
-    res.add_argument("--gl", default=cfg.google_flights.gl, help="Point of sale region code (e.g. SE, FI, DE)")
+    res.add_argument("--gl", default=None, help="Point of sale region code(s) (e.g. 'FI', 'SE', or 'FI,SE')")
     res.add_argument("--min-stay-nights", type=int, default=cfg.trip.min_stay_nights, help="Minimum stay duration in nights")
     res.add_argument("--delay-seconds", type=int, default=cfg.google_flights.delay_seconds, help="Delay between pages in seconds")
     res.add_argument("--timeout-seconds", type=int, default=cfg.google_flights.timeout_seconds)

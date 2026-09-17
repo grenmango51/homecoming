@@ -1,0 +1,57 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Helsinki (HEL) -> Amsterdam (AMS)
+# ==============================================================================
+
+[trip]
+# Departure and arrival airport codes (IATA 3-letter uppercase)
+origin = "HEL"
+dest = "AMS"
+
+# Minimum stay duration at destination in nights
+min_stay_nights = 21
+
+# Strategy for generating search date pairs:
+# - "exact": Specific list of departure and return date pairs (matching HEL_HAN)
+# - "range": Cartesian product of departure dates and return dates
+# - "window": All valid departures & returns inside the full holiday window
+date_mode = "exact"
+
+# ------------------------------------------------------------------------------
+# Date settings for "exact" mode (matching HEL_HAN)
+# ------------------------------------------------------------------------------
+exact_pairs = [
+    # Departure: Wednesday, 2026-12-09
+    ["2026-12-09", "2027-01-05"],
+    ["2026-12-09", "2027-01-06"],
+    ["2026-12-09", "2027-01-07"],
+    ["2026-12-09", "2027-01-09"],
+
+    # Departure: Thursday, 2026-12-10
+    ["2026-12-10", "2027-01-05"],
+    ["2026-12-10", "2027-01-06"],
+    ["2026-12-10", "2027-01-07"],
+    ["2026-12-10", "2027-01-09"],
+]
+
+# ------------------------------------------------------------------------------
+# Date settings for "range" mode (active when date_mode = "range")
+# ------------------------------------------------------------------------------
+depart_from = "2026-12-09"
+depart_to = "2026-12-13"
+return_from = "2027-01-05"
+return_to = "2027-01-09"
+
+# ------------------------------------------------------------------------------
+# Date settings for "window" mode (active when date_mode = "window")
+# ------------------------------------------------------------------------------
+window_start = "2026-12-09"
+window_end = "2027-01-09"
+
+[google_flights]
+results_dir = "flight_results_HEL_AMS"
+
+[skyscanner]
+results_dir = "flight_results_skyscanner_HEL_AMS"
+
+[comparison]
+output_dir = "flight_results_HEL_AMS"
