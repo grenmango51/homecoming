@@ -398,15 +398,17 @@ async def run(args: argparse.Namespace) -> int:
 
     profile_dir = Path(os.environ.get("SKYSCANNER_PROFILE_DIR", args.profile_dir)).resolve()
     results_dir = Path(args.results_dir).resolve()
-    browser_executable = resolve_browser_executable(args.browser_executable)
+    browser_executable = resolve_browser_executable(args.browser_executable) if args.browser_executable else None
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[Skyscanner] Scanning {len(pairs)} exact date pairs in a visible browser.")
+    print(f"[Skyscanner] Scanning {len(pairs)} exact date pairs.")
     print(f"[Skyscanner] Results: {results_dir}")
     if browser_executable:
-        print(f"[Skyscanner] Using installed browser: {browser_executable}")
+        print(f"[Skyscanner] Using custom browser executable: {browser_executable}")
+    else:
+        print("[Skyscanner] Using Patchright stealth Chromium engine.")
 
     stamp = reporting.today_stamp()
     report_json: Path = results_dir / f"{REPORT_STEM}_{stamp}.json"

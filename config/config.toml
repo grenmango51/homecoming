@@ -59,7 +59,7 @@ poll_wait_seconds = 30
 challenge_timeout_seconds = 120
 
 # Dedicated browser profile directory (relative to project root)
-profile_dir = ".skyscanner-profile"
+profile_dir = ".skyscanner-profile-stealth"
 
 # Results output directory (relative to project root)
 results_dir = "flight_results_skyscanner"
