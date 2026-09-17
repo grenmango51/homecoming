@@ -417,9 +417,7 @@ async def scan_pair(
 
 async def run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config, args.trip)
-    if cfg.trip.date_mode == "exact" and cfg.trip.exact_pairs and not (args.depart_from and args.depart_to):
-        pairs = [p for p in cfg.trip.get_search_pairs() if p[1] is not None]
-    elif args.depart_from:
+    if args.depart_from and args.depart_to:
         pairs = build_search_pairs(
             depart_from=args.depart_from,
             depart_to=args.depart_to,
@@ -428,11 +426,7 @@ async def run(args: argparse.Namespace) -> int:
             min_stay_nights=args.min_stay_nights,
         )
     else:
-        pairs = build_search_pairs(
-            window_start=args.window_start,
-            window_end=args.window_end,
-            min_stay_nights=args.min_stay_nights,
-        )
+        pairs = [p for p in cfg.trip.get_search_pairs() if p[1] is not None]
 
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")

@@ -156,13 +156,7 @@ def resolve_pairs(args: argparse.Namespace, cfg: Any) -> list[tuple[dt.date, dt.
             return_to=args.return_to,
             min_stay_nights=args.min_stay_nights,
         )
-    if cfg.trip.date_mode == "exact" and cfg.trip.exact_pairs:
-        return [pair for pair in cfg.trip.get_search_pairs() if pair[1] is not None]
-    return build_search_pairs(
-        window_start=args.window_start,
-        window_end=args.window_end,
-        min_stay_nights=args.min_stay_nights,
-    )
+    return [pair for pair in cfg.trip.get_search_pairs() if pair[1] is not None]
 
 
 def cached_observation(

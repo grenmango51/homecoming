@@ -14,7 +14,7 @@ min_stay_nights = 21
 # - "exact": Specific list of departure and return date pairs (3 key focus dates)
 # - "range": Cartesian product of departure dates and return dates (e.g. 5x5 = 25 pairs)
 # - "window": All valid departures & returns inside the full holiday window (e.g. 66 pairs)
-date_mode = "exact"
+date_mode = "range"
 
 # ------------------------------------------------------------------------------
 # Date settings for "exact" mode (active when date_mode = "exact")
