@@ -117,6 +117,27 @@ def write_daily_report(
     )
 
 
+async def reset_session(page: Page) -> None:
+    """Clear cookies/tokens and warm up on homepage to reset anti-bot challenges."""
+    try:
+        await page.context.clear_cookies()
+        await page.context.add_cookies([
+            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.net", "path": "/"},
+            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.fi", "path": "/"},
+        ])
+        print("[Skyscanner] Resetting session on homepage...", flush=True)
+        await page.goto("https://www.skyscanner.fi/", wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(1000)
+        for btn_name in ("Reject all", "Hylkää kaikki", "Decline all", "Accept all", "Hyväksy kaikki"):
+            btn = page.get_by_role("button", name=btn_name, exact=False)
+            if await btn.count() > 0 and await btn.first.is_visible():
+                await btn.first.click(timeout=2000)
+                await page.wait_for_timeout(500)
+                break
+    except Exception:
+        pass
+
+
 async def scan_pair(
     page: Page,
     *,
@@ -126,7 +147,7 @@ async def scan_pair(
     return_date: dt.date,
     timeout_ms: int,
     poll_wait_seconds: int = 30,
-    challenge_timeout_seconds: int = 90,
+    challenge_timeout_seconds: int = 25,
 ) -> dict[str, Any]:
     """Navigate to Skyscanner, handle consent/challenges gracefully, and extract flight fares."""
     captured_payloads: list[dict[str, Any]] = []
@@ -175,6 +196,16 @@ async def scan_pair(
 
         # Check for challenge / bot detection
         page_text = await page.locator("body").inner_text()
+        if is_challenge_page(page.url, page_text):
+            print("[Skyscanner] Anti-bot challenge detected. Attempting automated session reset...", flush=True)
+            await reset_session(page)
+            try:
+                await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                await page.wait_for_timeout(2000)
+                page_text = await page.locator("body").inner_text()
+            except Exception:
+                pass
+
         if is_challenge_page(page.url, page_text):
             print(
                 "\n" + "!" * 70 + "\n"
@@ -325,6 +356,16 @@ async def scan_pair(
 
         # Check for challenge / bot detection after polling as well
         if is_challenge_page(page.url, page_text):
+            print("[Skyscanner] Anti-bot challenge detected after poll. Attempting automated session reset...", flush=True)
+            await reset_session(page)
+            try:
+                await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                await page.wait_for_timeout(3000)
+                page_text = await page.locator("body").inner_text()
+            except Exception:
+                pass
+
+        if is_challenge_page(page.url, page_text):
             print(
                 "\n" + "!" * 70 + "\n"
                 "[ACTION REQUIRED] Skyscanner anti-bot challenge detected in the visible browser window!\n"
@@ -435,6 +476,9 @@ async def run(args: argparse.Namespace) -> int:
         ])
         page = context.pages[0] if context.pages else await context.new_page()
 
+        # Clean session warm-up: clear any stale perimeterX cookies and warm up on homepage
+        await reset_session(page)
+
         try:
             for index, (departure, return_date) in enumerate(pairs, start=1):
                 pair_file = results_dir / f"{departure}_{return_date}.json"
@@ -494,6 +538,7 @@ async def run(args: argparse.Namespace) -> int:
                             flush=True,
                         )
                         await page.wait_for_timeout(cooloff * 1000)
+                        await reset_session(page)
 
                 saved = save_observation(results_dir, observation)
                 observations.append(observation)
@@ -515,6 +560,7 @@ async def run(args: argparse.Namespace) -> int:
                     ret = dt.date.fromisoformat(fl["return_date"])
                     print(f"[Skyscanner] [Sweep {sw_idx}/{len(flagged)}] Retrying {dep} -> {ret}...")
                     try:
+                        await reset_session(page)
                         sw_obs = await scan_pair(
                             page,
                             origin=args.origin,

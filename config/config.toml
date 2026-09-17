@@ -47,7 +47,7 @@ results_dir = "flight_results"
 enabled = true
 
 # Delay between searches in seconds
-delay_seconds = 10
+delay_seconds = 12
 
 # Page load timeout in seconds
 timeout_seconds = 45
@@ -56,7 +56,7 @@ timeout_seconds = 45
 poll_wait_seconds = 30
 
 # Wait time in seconds if manual challenge / CAPTCHA solving is required
-challenge_timeout_seconds = 120
+challenge_timeout_seconds = 25
 
 # Dedicated browser profile directory (relative to project root)
 profile_dir = ".skyscanner-profile-stealth"
