@@ -101,31 +101,6 @@ To track a new route:
 3. In `config/config.toml`, change `trip_file = "JFK_CDG.toml"`.
 4. Run `python run_all.py`.
 
----
-
-## Running Specific Trips or Single Platforms
-
-You can easily override settings directly from the terminal without editing any files:
-
-- **Run a different trip profile:**
-  ```powershell
-  python run_all.py --trip PHL_HAN.toml
-  ```
-
-- **Run only Google Flights:**
-  ```powershell
-  python find_flights.py
-  ```
-
-- **Run only Skyscanner:**
-  ```powershell
-  python find_flights_skyscanner.py
-  ```
-
-- **Quick custom dates search on Google Flights:**
-  ```powershell
-  python find_flights.py --origin HEL --dest HAN --depart-from 2026-12-09 --depart-to 2026-12-09 --return-from 2027-01-07 --return-to 2027-01-07
-  ```
 
 ---
 
