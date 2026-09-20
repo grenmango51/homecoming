@@ -124,7 +124,7 @@ def parse_numeric_price(raw: str) -> float | None:
             s = s.replace(",", ".")
     try:
         val = float(s)
-        return val if 50.0 <= val <= 25000.0 else None
+        return val if 0.01 <= val <= 100_000.0 else None
     except ValueError:
         return None
 

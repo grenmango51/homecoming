@@ -36,7 +36,7 @@ A visible browser window will open to fetch live prices. Once finished, a summar
 
 ## Configuring Your Flights
 
-All flight search settings are configured through simple trip files located in the `config/` folder (such as `config/HEL_HAN.toml`).
+All flight search settings are configured through simple trip files located in the `config/trips/` folder (such as `config/trips/HEL_HAN.toml`, with `config/HEL_HAN.toml` supported for backwards compatibility).
 
 To select which trip file to use, set `trip_file` in [`config/config.toml`](config/config.toml):
 
@@ -45,9 +45,9 @@ To select which trip file to use, set `trip_file` in [`config/config.toml`](conf
 trip_file = "HEL_HAN.toml"
 ```
 
-### Flight Settings (`config/<YOUR_TRIP>.toml`)
+### Flight Settings (`config/trips/<YOUR_TRIP>.toml`)
 
-Open your route's configuration file (e.g., `config/HEL_HAN.toml`) to customize your travel details:
+Open your route's configuration file (e.g., `config/trips/HEL_HAN.toml`) to customize your travel details:
 
 ```toml
 [trip]
@@ -96,7 +96,7 @@ window_end   = "2027-01-09"
 ### Adding a New Route
 
 To track a new route:
-1. Create a new file in `config/` named after your route (for example, `config/JFK_CDG.toml` for New York to Paris).
+1. Create a new file in `config/trips/` named after your route (for example, `config/trips/JFK_CDG.toml` for New York to Paris).
 2. Set your `origin`, `dest`, and dates inside that file.
 3. In `config/config.toml`, change `trip_file = "JFK_CDG.toml"`.
 4. Run `python run_all.py`.

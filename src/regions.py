@@ -12,12 +12,20 @@ from pathlib import Path
 
 from src.config import PROJECT_ROOT
 
-REGIONS_MAPPING_FILE = PROJECT_ROOT / "all_available_regions_mapped.json"
+DATA_DIR = PROJECT_ROOT / "data" / "reference"
+REGIONS_MAPPING_FILE = DATA_DIR / "all_available_regions_mapped.json"
+FALLBACK_MAPPING_FILE = PROJECT_ROOT / "all_available_regions_mapped.json"
 
 
 def load_all_regions(regions_file: Path | str | None = None) -> list[dict[str, str]]:
     """Load ``[{"gl": .., "name": ..}, ..]`` region records, falling back to gl as name."""
-    target = Path(regions_file) if regions_file else REGIONS_MAPPING_FILE
+    if regions_file:
+        target = Path(regions_file)
+    elif REGIONS_MAPPING_FILE.exists():
+        target = REGIONS_MAPPING_FILE
+    else:
+        target = FALLBACK_MAPPING_FILE
+
     if not target.exists():
         raise FileNotFoundError(f"Missing region mapping file: {target}")
     data = json.loads(target.read_text(encoding="utf-8"))

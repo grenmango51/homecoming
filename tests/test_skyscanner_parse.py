@@ -113,6 +113,20 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(obs["status"], "observed")
         self.assertEqual(obs["stay_nights"], 31)
 
+    def test_budget_fares_below_200_are_preserved(self) -> None:
+        obs = make_observation(
+            origin="HEL",
+            destination="AMS",
+            departure=dt.date(2026, 12, 9),
+            return_date=dt.date(2027, 1, 9),
+            page_url="https://www.skyscanner.fi/transport/flights/hel/ams/261209/270109/",
+            page_text="Halvin 45 €",
+            xhr_candidates=[{"price_eur": 45.0}],
+            dom_candidates=["Suora 2 hr 30 min 45 €"],
+        )
+        self.assertEqual(obs["lowest_observed_price_eur"], 45.0)
+        self.assertEqual(obs["status"], "observed")
+
 
 if __name__ == "__main__":
     unittest.main()

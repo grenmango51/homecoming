@@ -138,8 +138,9 @@ async def orchestrate(
 
     if exit_codes and all(code != 0 for code in exit_codes.values()):
         print("[Comparison] Skipping price comparison because all scrapers failed.")
-        return 1
+        return 2
 
+    comparison_failed = False
     if cfg.execution.auto_compare:
         print("[Comparison] Running cross-platform price comparison...")
         from src.compare import main as compare_main
@@ -154,6 +155,10 @@ async def orchestrate(
         except SystemExit as exc:
             if exc.code not in (0, None):
                 print(f"[Comparison] Warning: Comparison exited with code {exc.code}")
+                comparison_failed = True
+
+    if any(code != 0 for code in exit_codes.values()) or comparison_failed:
+        return 1
 
     return 0
 

@@ -1,27 +1,18 @@
-"""Playwright helpers shared by the Google Flights scanners.
+"""Google Flights browser automation and DOM interaction helpers.
 
-Every scanner drives the same rendered page, so consent handling, result
-waiting, cheapest-tab switching and card extraction live here once. The pure
-parsing these helpers delegate to lives in :mod:`src.google_parse`.
+Drives the rendered Google Flights interface: result readiness waiting,
+cheapest-tab switching, sort order enforcement, and card extraction.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-from playwright.async_api import BrowserContext, Page, Playwright
+from playwright.async_api import Page
 
+from src.browser.session import page_text
 from src.google_parse import is_blocked, parse_card_details
-
-# Pre-seeded so the dedicated profile never sees an interstitial consent wall.
-GOOGLE_CONSENT_COOKIES = [
-    {"name": "SOCS", "value": "CAESEwgDEgk1ODEzNzI3NDQaAmVuIAEaBgiAo_mwBg", "domain": ".google.com", "path": "/"},
-    {"name": "CONSENT", "value": "PENDING+999", "domain": ".google.com", "path": "/"},
-]
-
-CONSENT_BUTTON_NAMES = ("Reject all", "Accept all")
 
 DEFAULT_CARD_SELECTOR = "ul.Rk10dc > li, li.pIav2d"
 LISTITEM_CARD_SELECTOR = "ul.Rk10dc > li, li[role='listitem'], [role='listitem'], li.pIav2d"
@@ -39,68 +30,8 @@ _RESULTS_READY_JS = """() => {
 }"""
 
 
-async def launch_google_context(
-    playwright: Playwright,
-    profile_dir: Path | str,
-    *,
-    headless: bool = False,
-    executable_path: str | None = None,
-    viewport: dict[str, int] | None = None,
-) -> BrowserContext:
-    """Open a persistent Chromium profile pre-seeded with Google consent cookies."""
-    context = await playwright.chromium.launch_persistent_context(
-        str(profile_dir),
-        headless=headless,
-        executable_path=executable_path,
-        locale="en-US",
-        viewport=viewport or {"width": 1440, "height": 1000},
-        args=["--disable-blink-features=AutomationControlled"],
-    )
-    try:
-        await context.add_cookies(GOOGLE_CONSENT_COOKIES)
-    except Exception:
-        pass
-    return context
-
-
-async def page_text(page: Page) -> str:
-    """Body text of the page, or an empty string if it could not be read."""
-    try:
-        return await page.locator("body").inner_text()
-    except Exception:
-        return ""
-
-
-async def dismiss_consent(page: Page, target_url: str | None = None, timeout_ms: int = 3_000) -> bool:
-    """Dismiss the first-run cookie banner, preferring the privacy-preserving choice.
-
-    Each button name is matched on its own locator: a combined selector would
-    match both buttons at once and trip Playwright's strict-mode check.
-    """
-    for name in CONSENT_BUTTON_NAMES:
-        try:
-            button = page.get_by_role("button", name=name, exact=True).first
-            if await button.count() == 0 or not await button.is_visible(timeout=timeout_ms):
-                continue
-            await button.click(timeout=timeout_ms)
-            await page.wait_for_timeout(500)
-            if target_url:
-                try:
-                    await page.wait_for_url(lambda url: "travel/flights" in url, timeout=10_000)
-                except Exception:
-                    await page.goto(target_url, wait_until="domcontentloaded")
-            return True
-        except Exception:
-            continue
-    return False
-
-
 async def wait_for_results(page: Page, timeout_ms: int, settle_ms: int = 2_500) -> str:
-    """Wait for rendered results, then let cards and the cheapest banner settle.
-
-    Never raises: a timeout leaves whatever the page currently shows for the
-    caller to classify, which keeps a supervised browser open for intervention.
-    """
+    """Wait for rendered results, then let cards and the cheapest banner settle."""
     try:
         await page.wait_for_function(_RESULTS_READY_JS, timeout=timeout_ms)
     except Exception:
@@ -209,12 +140,7 @@ async def extract_cards(
     scroll_steps: int = 1,
     parser: Callable[[str, str], dict[str, Any]] = parse_card_details,
 ) -> list[dict[str, Any]]:
-    """Parse the visible flight cards, de-duplicated and priced.
-
-    Reads the already-rendered Top and Other departing flights. It deliberately
-    never clicks 'view more flights', which collapses the Top Departing Flights
-    section and loses the cheapest results.
-    """
+    """Parse the visible flight cards, de-duplicated and priced."""
     for _ in range(scroll_steps):
         try:
             await page.evaluate("window.scrollBy(0, 400)")

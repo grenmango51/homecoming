@@ -9,7 +9,7 @@ dynamic = ["dependencies"]
 dependencies = { file = ["requirements.txt"] }
 
 [tool.setuptools]
-packages = ["src"]
+packages = ["src", "src.browser"]
 
 [tool.ruff]
 line-length = 120

@@ -68,7 +68,7 @@ async def extract_dom_candidate_cards(page: Page) -> list[str]:
             lower = compact.lower()
             if not any(term in lower for term in flight_indicators):
                 continue
-            prices = [p for p in money_values(compact) if p >= 200.0]
+            prices = [p for p in money_values(compact) if p > 0]
             if prices:
                 key = compact[:100].lower()
                 if key not in seen:
@@ -580,6 +580,11 @@ async def run(args: argparse.Namespace) -> int:
             await context.close()
 
     print(f"\n[Skyscanner] Daily Skyscanner report written: {report_json.name}, {report_csv.name}")
+    failed_count = sum(1 for obs in observations if obs.get("status") != "observed")
+    if observations and failed_count == len(observations):
+        return 2
+    if failed_count > 0:
+        return 1
     return 0
 
 

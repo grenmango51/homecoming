@@ -144,9 +144,18 @@ class AppConfig:
 
 
 def resolve_trip_file(raw_path: str | Path, base_dir: Path) -> Path | None:
-    """Find a trip file given a bare name, or a path relative to the config dir or project root."""
+    """Find a trip file given a bare name, or a path relative to config/trips/, config/, or project root."""
     candidate = Path(raw_path)
-    for path in (candidate, base_dir / candidate, CONFIG_DIR / candidate, PROJECT_ROOT / candidate):
+    trips_dir = CONFIG_DIR / "trips"
+    for path in (
+        candidate,
+        trips_dir / candidate,
+        trips_dir / candidate.name,
+        base_dir / candidate,
+        base_dir / "trips" / candidate,
+        CONFIG_DIR / candidate,
+        PROJECT_ROOT / candidate,
+    ):
         if path.is_file():
             return path.resolve()
     return None

@@ -195,22 +195,22 @@ def make_observation(
 
     observed_prices: list[float] = []
     tab_price = cheapest_tab_price(page_text)
-    if tab_price is not None and tab_price >= 200.0:
+    if tab_price is not None and tab_price > 0:
         observed_prices.append(tab_price)
 
     for c in xhr_candidates:
         p = c.get("price_eur")
-        if p is not None and float(p) >= 200.0:
+        if p is not None and float(p) > 0:
             observed_prices.append(float(p))
 
     for block in dom_candidates:
         for p in money_values(block):
-            if p >= 200.0:
+            if p > 0:
                 observed_prices.append(p)
 
     if not observed_prices and status == "observed":
         for p in money_values(page_text):
-            if p >= 200.0:
+            if p > 0:
                 observed_prices.append(p)
 
     lowest_price: float | None = min(observed_prices) if observed_prices else None

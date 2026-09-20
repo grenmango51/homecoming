@@ -68,8 +68,14 @@ class PriceParsingTests(unittest.TestCase):
     def test_rejects_non_numeric_and_implausible_values(self) -> None:
         self.assertIsNone(parse_numeric_price("invalid"))
         self.assertIsNone(parse_numeric_price(""))
-        self.assertIsNone(parse_numeric_price("49"))
-        self.assertIsNone(parse_numeric_price("30000"))
+        self.assertIsNone(parse_numeric_price("0"))
+        self.assertIsNone(parse_numeric_price("200000"))
+
+    def test_accepts_budget_and_premium_fares(self) -> None:
+        """Fares below €50 and above €25000 are valid after removing arbitrary floors."""
+        self.assertEqual(parse_numeric_price("19"), 19.0)
+        self.assertEqual(parse_numeric_price("49"), 49.0)
+        self.assertEqual(parse_numeric_price("30000"), 30000.0)
 
 
 class DurationTests(unittest.TestCase):

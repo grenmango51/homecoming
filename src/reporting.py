@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import json
+import os
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -63,25 +64,40 @@ def utc_now() -> str:
 
 
 def write_json(path: Path, payload: Any) -> Path:
-    """Write indented UTF-8 JSON, creating parent directories as needed."""
+    """Write indented UTF-8 JSON atomically, creating parent directories as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        raise
     return path
 
 
 def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict[str, Any]]) -> Path:
-    """Write a CSV restricted to ``fieldnames``, ignoring any extra keys."""
+    """Write a CSV restricted to ``fieldnames`` atomically, ignoring any extra keys."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(fieldnames), extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        with temp_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(fieldnames), extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+        raise
     return path
 
 
 def pair_filename(departure: Any, return_date: Any) -> str:
     """Checkpoint name for a single date pair, e.g. ``2026-12-09_2027-01-05.json``."""
-    return f"{departure}_{return_date}.json"
+    ret = "oneway" if return_date is None else str(return_date)
+    return f"{departure}_{ret}.json"
 
 
 def checkpoint_filename(origin: str, dest: str, dep: dt.date, ret: dt.date | None, gl: str) -> str:
@@ -92,8 +108,9 @@ def checkpoint_filename(origin: str, dest: str, dep: dt.date, ret: dt.date | Non
 
 def save_observation(results_dir: Path, observation: dict[str, Any]) -> Path:
     """Persist one observation keyed by its date pair."""
+    observation.setdefault("schema_version", 2)
     return write_json(
-        results_dir / pair_filename(observation["departure_date"], observation["return_date"]),
+        results_dir / pair_filename(observation["departure_date"], observation.get("return_date")),
         observation,
     )
 
@@ -114,7 +131,10 @@ def write_daily_report(
     """
     results_dir.mkdir(parents=True, exist_ok=True)
     stamp = today_stamp()
-    rows = sorted(observations, key=lambda item: (item["departure_date"], item["return_date"]))
+    rows = sorted(
+        observations,
+        key=lambda item: (str(item.get("departure_date") or ""), str(item.get("return_date") or "")),
+    )
     fallbacks = fallbacks or {}
 
     json_path = write_json(
