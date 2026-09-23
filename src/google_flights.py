@@ -20,12 +20,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from playwright.async_api import Page, async_playwright
-except ImportError as error:
-    raise SystemExit(
-        "Playwright is required. Run: python -m pip install -r requirements.txt "
-        "and then: python -m playwright install chromium"
-    ) from error
+    from patchright.async_api import Page, async_playwright
+    _USING_PATCHRIGHT = True
+except ImportError:
+    try:
+        from playwright.async_api import Page, async_playwright
+        _USING_PATCHRIGHT = False
+    except ImportError as error:
+        raise SystemExit(
+            "Patchright or Playwright is required. Run: .\\.venv\\Scripts\\python.exe -m pip install patchright "
+            "and then: .\\.venv\\Scripts\\patchright.exe install chromium"
+        ) from error
 
 from src import browser, reporting
 from src.common import (
@@ -240,6 +245,10 @@ async def run(args: argparse.Namespace) -> int:
         f"[Google Flights] Scanning {len(pairs)} date pairs in a visible browser "
         f"(Point of Sale: {', '.join(gl_list)}). Results: {base_results_dir}"
     )
+    if _USING_PATCHRIGHT:
+        print("[Google Flights] Using Patchright stealth Chromium engine.")
+    else:
+        print("[Google Flights] Using Playwright Chromium engine (Patchright not available).")
     print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
     if browser_executable:
         print(f"[Google Flights] Using installed browser: {browser_executable}")

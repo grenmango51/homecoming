@@ -9,7 +9,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from playwright.async_api import Page
+try:
+    from patchright.async_api import Page
+except ImportError:
+    from playwright.async_api import Page
 
 from src.browser.session import page_text
 from src.google_parse import is_blocked, parse_card_details

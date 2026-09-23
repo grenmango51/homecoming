@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from playwright.async_api import BrowserContext, Page, Playwright
+try:
+    from patchright.async_api import BrowserContext, Page, Playwright
+except ImportError:
+    from playwright.async_api import BrowserContext, Page, Playwright
 
 # Pre-seeded so the dedicated profile never sees an interstitial consent wall.
 GOOGLE_CONSENT_COOKIES = [
@@ -34,7 +37,12 @@ async def launch_google_context(
         executable_path=executable_path,
         locale="en-US",
         viewport=viewport or {"width": 1440, "height": 1000},
-        args=["--disable-blink-features=AutomationControlled"],
+        ignore_default_args=["--enable-automation"],
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-infobars",
+        ],
     )
     try:
         await context.add_cookies(GOOGLE_CONSENT_COOKIES)

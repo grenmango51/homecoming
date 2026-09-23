@@ -11,7 +11,10 @@ import sys
 import time
 from pathlib import Path
 
-from playwright.async_api import BrowserContext, Page, Playwright
+try:
+    from patchright.async_api import BrowserContext, Page, Playwright
+except ImportError:
+    from playwright.async_api import BrowserContext, Page, Playwright
 
 from src.skyscanner_parse import is_challenge_page, money_values
 
