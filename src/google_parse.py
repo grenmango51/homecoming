@@ -12,7 +12,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from src.common import EUROS_RE, PRICE_RE, duration_minutes
+from src.common import COMPLETION_VERSION, EUROS_RE, PRICE_RE, duration_minutes, is_valid_eur_fare
 
 GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
 
@@ -34,11 +34,13 @@ MULTI_CURRENCY_RE = re.compile(
     r"(?:[€$£₺₫]|EUR|USD|GBP|TRY|VND|QAR|AED|SEK)\s*([0-9][0-9.,\s]*)", re.IGNORECASE
 )
 AIRPORT_RE = re.compile(r"\b([A-Z]{3})\b")
+ROUTE_PAIR_RE = re.compile(r"\b([A-Z]{3})\s*[\u2010-\u2015\-]\s*([A-Z]{3})\b")
 
-# Minimum plausible fare, per parser. The EUR-only parser used by the daily
-# HEL->HAN scan can assume long-haul pricing; the multi-currency parser used by
-# the POS studies must also accept short-haul and weak-currency quotes.
-MIN_EUR_FARE = 50.0
+# Ancillary fee terms to exclude from flight fare parsing (e.g. baggage, seats)
+ANCILLARY_TERMS = (
+    "baggage", "bag", "bags", "seat", "seats", "carry-on", "carryon",
+    "laukku", "istuin", "matkatavara", "maksu", "fee", "fees",
+)
 MIN_MULTI_CURRENCY_FARE = 15.0
 
 KEY_AIRLINES = [
@@ -157,19 +159,29 @@ def _normalize_grouping(raw: str) -> str:
 def money_values(text: str) -> list[float]:
     """Euro fares in a card or page. Used by the daily HEL->HAN scan."""
     values: list[float] = []
-    for raw in PRICE_RE.findall(text) + EUROS_RE.findall(text):
-        normalized = raw.replace(" ", "").replace(" ", "")
-        normalized = (
-            normalized.replace(",", "")
-            if normalized.count(",") <= 1
-            else normalized.replace(".", "").replace(",", ".")
-        )
-        try:
-            value = float(normalized)
-        except ValueError:
-            continue
-        if value >= MIN_EUR_FARE:
-            values.append(value)
+    for pattern in (PRICE_RE, EUROS_RE):
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            preceding = text[max(0, start - 25):start].lower()
+            trailing = text[end:min(len(text), end + 20)].lower()
+            if any(
+                re.search(rf"\b{re.escape(w)}\b", preceding) or re.search(rf"\b{re.escape(w)}\b", trailing)
+                for w in ANCILLARY_TERMS
+            ):
+                continue
+            raw = match.group(1) if match.groups() else match.group(0)
+            normalized = raw.replace(" ", "").replace(" ", "")
+            normalized = (
+                normalized.replace(",", "")
+                if normalized.count(",") <= 1
+                else normalized.replace(".", "").replace(",", ".")
+            )
+            try:
+                value = float(normalized)
+            except ValueError:
+                continue
+            if is_valid_eur_fare(value):
+                values.append(value)
     return values
 
 
@@ -205,7 +217,7 @@ def cheapest_banner_price(text: str) -> float | None:
         value = float(normalized)
     except ValueError:
         return None
-    return value if value >= MIN_EUR_FARE else None
+    return value if is_valid_eur_fare(value) else None
 
 
 def tab_price(tab_text: str) -> float | None:
@@ -234,11 +246,14 @@ def stop_count(text: str) -> int:
 
 def _card_from_prices(raw_text: str, prices: list[float], curr: str) -> dict[str, Any]:
     lowered = raw_text.lower()
+    endpoints = set(_ROUTE_ENDPOINTS)
+    for pair in ROUTE_PAIR_RE.findall(raw_text):
+        endpoints.update(pair)
     layovers = list(
         dict.fromkeys(
             code
             for code in AIRPORT_RE.findall(raw_text)
-            if code in KNOWN_AIRPORTS and code not in _ROUTE_ENDPOINTS
+            if code in KNOWN_AIRPORTS and code not in endpoints
         )
     )
     return {
@@ -306,14 +321,17 @@ def make_observation(
     return_date: dt.date,
     page_text: str,
     candidates: list[dict[str, Any]] | list[str],
+    status: str | None = None,
+    completion_evidence: str | None = None,
 ) -> dict[str, Any]:
     """Build the persisted observation for one date pair.
 
     The lowest fare is the cheaper of the parsed cards and the 'Cheapest' banner.
-    A page that parsed prices but lacked the usual result markers is promoted
-    from ``incomplete`` to ``observed``.
+    A page that parsed valid flight cards but lacked the usual result markers is
+    promoted from ``incomplete`` to ``observed`` only if no error/loading remains.
     """
-    status = page_status(page_text)
+    if status is None:
+        status = page_status(page_text)
     candidate_prices: list[float] = []
     cards: list[dict[str, Any]] = []
 
@@ -333,7 +351,6 @@ def make_observation(
             )
         candidate_prices.extend(prices)
 
-    # cheapest_banner_price already rejects anything below MIN_EUR_FARE.
     banner = cheapest_banner_price(page_text)
     if candidate_prices:
         lowest_price: float | None = min(candidate_prices)
@@ -348,7 +365,23 @@ def make_observation(
         lowest_price = None
 
     if (candidate_prices or banner is not None) and status == "incomplete":
-        status = "observed"
+        lowered = page_text.lower()
+        if "something went wrong" not in lowered and "no results returned" not in lowered:
+            status = "observed"
+
+    if status == "observed":
+        if completion_evidence is None:
+            if candidate_prices and banner is not None:
+                completion_evidence = "google_flights_banner_and_cards"
+            elif candidate_prices:
+                completion_evidence = "google_flights_cards"
+            elif banner is not None:
+                completion_evidence = "google_flights_banner"
+            else:
+                completion_evidence = "google_flights_page_text"
+    else:
+        lowest_price = None
+        completion_evidence = None
 
     card_text = "\n".join(card.get("text", "") for card in cards)
     return {
@@ -361,6 +394,8 @@ def make_observation(
         "stay_nights": (return_date - departure).days,
         "status": status,
         "lowest_observed_price_eur": lowest_price,
+        "completion_version": COMPLETION_VERSION,
+        "completion_evidence": completion_evidence,
         "protection_label": protection_label(card_text or page_text),
         "seller_confirmation_required": True,
         "candidate_cards": cards,

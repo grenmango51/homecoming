@@ -17,26 +17,34 @@ from src.google_parse import is_blocked, parse_card_details
 DEFAULT_CARD_SELECTOR = "ul.Rk10dc > li, li.pIav2d"
 LISTITEM_CARD_SELECTOR = "ul.Rk10dc > li, li[role='listitem'], [role='listitem'], li.pIav2d"
 
-# Resolves once results have rendered, or immediately if the page is an
-# anti-automation interstitial (so callers can classify and stop).
 _RESULTS_READY_JS = """() => {
     const text = document.body?.innerText || '';
     if (/unusual traffic|captcha|verify you are human/i.test(text)) {
         return true;
     }
+    const pb = document.querySelector("[role='progressbar'], .m6QErb.D5KUk");
+    const isPbVisible = pb && pb.getAttribute('aria-hidden') !== 'true' && window.getComputedStyle(pb).opacity !== '0' && window.getComputedStyle(pb).display !== 'none';
+    if (isPbVisible) {
+        return false;
+    }
+    const hasSkeletons = document.querySelectorAll("[class*='placeholder'], [class*='shimmer'], [class*='skeleton']").length > 0;
+    if (hasSkeletons) {
+        return false;
+    }
     const hasResults = /\\b\\d+\\s+results returned\\b|departing flights|cheapest|no flights/i.test(text);
-    const isLoading = /loading results|fetching results/i.test(text);
-    return hasResults && !isLoading;
+    const hasCards = document.querySelectorAll("ul.Rk10dc > li, li.pIav2d, [role='listitem']").length > 0;
+    return hasResults && hasCards;
 }"""
 
 
-async def wait_for_results(page: Page, timeout_ms: int, settle_ms: int = 2_500) -> str:
-    """Wait for rendered results, then let cards and the cheapest banner settle."""
+async def wait_for_results(page: Page, timeout_ms: int, settle_ms: int = 3_000) -> str:
+    """Wait for rendered results to appear and settle."""
     try:
         await page.wait_for_function(_RESULTS_READY_JS, timeout=timeout_ms)
-    except Exception:
-        pass
-    await page.wait_for_timeout(settle_ms)
+    except Exception as err:
+        raise TimeoutError(f"Google Flights results did not render within {timeout_ms}ms") from err
+    if settle_ms > 0:
+        await page.wait_for_timeout(settle_ms)
     return await page_text(page)
 
 
@@ -75,7 +83,7 @@ async def switch_to_cheapest_tab(page: Page) -> bool:
 
 
 async def sort_by_price(page: Page) -> bool:
-    """Switch the sort dropdown from 'Top flights' to 'Price'.
+    """Switch the sort dropdown from 'Top flights' to 'Price' using bounded readiness.
 
     A no-op when the URL already pins the cheapest sort via ``tfu``.
     """
@@ -89,7 +97,6 @@ async def sort_by_price(page: Page) -> bool:
         )
         if await sort_button.count() > 0 and await sort_button.first.is_visible():
             await sort_button.first.click(timeout=1_500)
-            await page.wait_for_timeout(1_000)
             price_option = page.locator(
                 "[role='menuitem']:has-text('Price'), [role='option']:has-text('Price'), span:text-is('Price')"
             )

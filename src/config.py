@@ -71,6 +71,7 @@ class ExecutionConfig:
     skip_existing: bool = True
     auto_compare: bool = True
     browser_executable: str | None = None
+    runtime_budget_seconds: int = 1800  # 30 minutes default
 
 
 @dataclass
@@ -120,7 +121,8 @@ class SkyscannerConfig(ScraperConfig):
     delay_seconds: int = 4
     timeout_seconds: int = 45
     poll_wait_seconds: int = 30
-    challenge_timeout_seconds: int = 90
+    challenge_timeout_seconds: int = 0  # Default 0 for unattended; set >0 for attended mode
+    attended: bool = False
     profile_dir: str = ".skyscanner-profile"
     results_dir: str = "flight_results_skyscanner"
 
@@ -246,6 +248,7 @@ def load_config(
             skip_existing=bool(exec_data.get("skip_existing", True)),
             auto_compare=bool(exec_data.get("auto_compare", True)),
             browser_executable=browser_executable,
+            runtime_budget_seconds=int(exec_data.get("runtime_budget_seconds", 1800)),
         ),
         google_flights=GoogleFlightsConfig(
             enabled=bool(gf_data.get("enabled", True)),
@@ -264,10 +267,27 @@ def load_config(
             delay_seconds=int(ss_data.get("delay_seconds", 4)),
             timeout_seconds=int(ss_data.get("timeout_seconds", 45)),
             poll_wait_seconds=int(ss_data.get("poll_wait_seconds", 30)),
-            challenge_timeout_seconds=int(ss_data.get("challenge_timeout_seconds", 90)),
+            challenge_timeout_seconds=int(ss_data.get("challenge_timeout_seconds", 0)),
+            attended=bool(ss_data.get("attended", False)),
             profile_dir=str(ss_data.get("profile_dir", ".skyscanner-profile")),
             results_dir=str(ss_data.get("results_dir", "flight_results_skyscanner")),
         ),
         comparison=ComparisonConfig(output_dir=str(comp_data.get("output_dir", "flight_results"))),
         trip_file=trip_filename,
     )
+
+
+def validate_config(cfg: AppConfig) -> list[str]:
+    """Return a list of configuration warnings/errors (empty = valid)."""
+    issues: list[str] = []
+    if cfg.execution.runtime_budget_seconds < 60:
+        issues.append(f"runtime_budget_seconds={cfg.execution.runtime_budget_seconds} is below 60s minimum.")
+    if cfg.skyscanner.timeout_seconds < 10:
+        issues.append(f"skyscanner.timeout_seconds={cfg.skyscanner.timeout_seconds} is below 10s minimum.")
+    if cfg.google_flights.timeout_seconds < 10:
+        issues.append(f"google_flights.timeout_seconds={cfg.google_flights.timeout_seconds} is below 10s minimum.")
+    if cfg.skyscanner.delay_seconds < 2:
+        issues.append(f"skyscanner.delay_seconds={cfg.skyscanner.delay_seconds} is below 2s minimum rate limit.")
+    if cfg.skyscanner.challenge_timeout_seconds > 0 and not cfg.skyscanner.attended:
+        issues.append("challenge_timeout_seconds > 0 but attended=false; challenges will be waited on but nobody may be watching.")
+    return issues

@@ -1,0 +1,53 @@
+# ==============================================================================
+# TRIP CONFIGURATION: Paris (PAR) -> Hanoi (HAN)
+# ==============================================================================
+
+[trip]
+origin = "PAR"
+dest = "HAN"
+
+# Minimum stay duration at destination in nights
+min_stay_nights = 21
+
+# Strategy for generating search date pairs:
+# - "range": Cartesian product of departure dates and return dates (5x5 = 25 pairs)
+date_mode = "range"
+
+# ------------------------------------------------------------------------------
+# Date settings for "range" mode (active when date_mode = "range")
+# ------------------------------------------------------------------------------
+depart_from = "2026-12-09"
+depart_to = "2026-12-13"
+return_from = "2027-01-05"
+return_to = "2027-01-09"
+
+# ------------------------------------------------------------------------------
+# Date settings for "exact" mode (active when date_mode = "exact")
+# ------------------------------------------------------------------------------
+exact_pairs = [
+    ["2026-12-09", "2027-01-05"],
+    ["2026-12-09", "2027-01-06"],
+    ["2026-12-09", "2027-01-07"],
+    ["2026-12-09", "2027-01-09"],
+    ["2026-12-10", "2027-01-05"],
+    ["2026-12-10", "2027-01-06"],
+    ["2026-12-10", "2027-01-07"],
+    ["2026-12-10", "2027-01-09"],
+]
+
+# ------------------------------------------------------------------------------
+# Date settings for "window" mode (active when date_mode = "window")
+# ------------------------------------------------------------------------------
+window_start = "2026-12-09"
+window_end = "2027-01-09"
+
+[google_flights]
+# Normal Finnish point of sale
+gl = "FI"
+results_dir = "flight_results_PAR_HAN"
+
+[skyscanner]
+results_dir = "flight_results_skyscanner_PAR_HAN"
+
+[comparison]
+output_dir = "flight_results_PAR_HAN"

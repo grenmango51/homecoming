@@ -15,14 +15,15 @@ import json
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 try:
-    from patchright.async_api import BrowserContext, Page, Response, async_playwright
+    from patchright.async_api import BrowserContext, Page, Request, Response, async_playwright
 except ImportError:
     try:
-        from playwright.async_api import BrowserContext, Page, Response, async_playwright
+        from playwright.async_api import BrowserContext, Page, Request, Response, async_playwright
     except ImportError as error:
         raise SystemExit(
             "Patchright or Playwright is required. Run: .\\.venv\\Scripts\\python.exe -m pip install patchright "
@@ -30,53 +31,39 @@ except ImportError:
         ) from error
 
 from src import reporting
-from src.common import build_search_pairs, configure_stdio, resolve_browser_executable
+from src.browser.skyscanner import (
+    SKYSCANNER_COOKIES,
+    extract_dom_candidate_cards,
+    try_solve_press_and_hold,
+    wait_for_challenge_resolution,
+)
+from src.browser.skyscanner import (
+    reset_session as _browser_reset_session,
+)
+from src.common import (
+    build_search_pairs,
+    circuit_breaker_tripped,
+    configure_stdio,
+    deferred_observation,
+    is_valid_completion_cache,
+    resolve_browser_executable,
+)
 from src.config import PROJECT_ROOT, load_config
 from src.reporting import SKYSCANNER_REPORT_FIELDS
 from src.skyscanner_parse import (
     SOURCE,
+    cheapest_tab_price,
     extract_from_xhr_payloads,
     flight_search_url,
     is_challenge_page,
     make_observation,
-    money_values,
+    select_authoritative_fare,
 )
 
 ROOT = PROJECT_ROOT
 REPORT_STEM = "daily_fare_report_skyscanner"
 
 NEEDS_HUMAN = {"blocked", "user_action_required"}
-
-async def extract_dom_candidate_cards(page: Page) -> list[str]:
-    """Fallback extraction of visible flight cards in the rendered DOM."""
-    locators = page.locator(
-        "div[class*='Ticket'], div[class*='Card'], [aria-label*='Flight option'], [aria-label*='Lentovaihtoehto'], [data-testid='flight-card'], [data-testid='itinerary-card'], [data-testid*='itinerary']"
-    )
-    count = await locators.count()
-    cards: list[str] = []
-    seen: set[str] = set()
-    flight_indicators = (
-        "stop", "vaihto", "vaihtoa", "välilasku", "suora", "direct",
-        "min", "hr", "tuntia", "tunti", "hel", "han", "lentovaihtoehto", "flight option"
-    )
-    for i in range(min(count, 40)):
-        try:
-            txt = await locators.nth(i).inner_text()
-            compact = " ".join(txt.split())
-            if len(compact) < 20:
-                continue
-            lower = compact.lower()
-            if not any(term in lower for term in flight_indicators):
-                continue
-            prices = [p for p in money_values(compact) if p > 0]
-            if prices:
-                key = compact[:100].lower()
-                if key not in seen:
-                    seen.add(key)
-                    cards.append(compact[:3000])
-        except Exception:
-            continue
-    return cards
 
 
 def failed_observation(
@@ -117,25 +104,86 @@ def write_daily_report(
     )
 
 
-async def reset_session(page: Page) -> None:
-    """Clear cookies/tokens and warm up on homepage to reset anti-bot challenges."""
+async def reset_session(page: Page, *, scrub_cookies: bool = False) -> None:
+    """Delegate to the browser module's reset_session."""
+    print(f"[Skyscanner] Resetting session on homepage (scrub_cookies={scrub_cookies})...", flush=True)
+    await _browser_reset_session(page, scrub_cookies=scrub_cookies)
+
+
+async def _handle_challenge(
+    page: Page,
+    page_text: str,
+    query_url: str,
+    *,
+    timeout_ms: int,
+    challenge_timeout_seconds: int,
+    attended: bool = False,
+) -> str:
+    """Multi-stage challenge handling:
+    1. Automated Press & Hold solver directly on current view
+    2. Cookie-scrubbed session reset and query reload
+    3. Second Press & Hold attempt on fresh page
+    4. Attended human solver (if enabled)
+    """
+    if not is_challenge_page(page.url, page_text):
+        return page_text
+
+    print("[Skyscanner] Anti-bot challenge detected. Attempting automated resolution...", flush=True)
+
+    # Stage 1: Try automated solving directly on current challenge screen
+    if await try_solve_press_and_hold(page):
+        try:
+            page_text = await page.locator("body").inner_text()
+            if not is_challenge_page(page.url, page_text):
+                return page_text
+        except Exception:
+            pass
+
+    # Stage 2: Session recovery with cookie scrubbing
+    print("[Skyscanner] Clearing blocked cookies and warming up on homepage...", flush=True)
+    await reset_session(page, scrub_cookies=True)
+    await page.wait_for_timeout(2000)
+
     try:
-        await page.context.clear_cookies()
-        await page.context.add_cookies([
-            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.net", "path": "/"},
-            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.fi", "path": "/"},
-        ])
-        print("[Skyscanner] Resetting session on homepage...", flush=True)
-        await page.goto("https://www.skyscanner.fi/", wait_until="domcontentloaded", timeout=20000)
-        await page.wait_for_timeout(1000)
-        for btn_name in ("Reject all", "Hylkää kaikki", "Decline all", "Accept all", "Hyväksy kaikki"):
-            btn = page.get_by_role("button", name=btn_name, exact=False)
-            if await btn.count() > 0 and await btn.first.is_visible():
-                await btn.first.click(timeout=2000)
-                await page.wait_for_timeout(500)
-                break
+        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page_text = await page.locator("body").inner_text()
     except Exception:
         pass
+
+    if not is_challenge_page(page.url, page_text):
+        print("[Skyscanner] Challenge cleared after cookie-scrubbed session reset!", flush=True)
+        return page_text
+
+    # Stage 3: Second attempt at Press & Hold on the fresh page
+    if await try_solve_press_and_hold(page):
+        try:
+            page_text = await page.locator("body").inner_text()
+            if not is_challenge_page(page.url, page_text):
+                return page_text
+        except Exception:
+            pass
+
+    # Stage 4: Attended mode if configured
+    if attended and challenge_timeout_seconds > 0:
+        print(
+            "\n" + "!" * 70 + "\n"
+            "[ACTION REQUIRED] Skyscanner anti-bot challenge detected in the visible browser window!\n"
+            "Please press and hold the verification button in Chrome to continue.\n"
+            f"Waiting up to {challenge_timeout_seconds} seconds for verification...\n"
+            + "!" * 70,
+            flush=True,
+        )
+        resolved = await wait_for_challenge_resolution(page, timeout_seconds=challenge_timeout_seconds)
+        try:
+            page_text = await page.locator("body").inner_text()
+        except Exception:
+            pass
+        if resolved:
+            print("[RESOLVED] Challenge passed! Resuming search.", flush=True)
+    else:
+        print("[Skyscanner] Automated challenge attempts did not clear challenge; proceeding.", flush=True)
+
+    return page_text
 
 
 async def scan_pair(
@@ -147,33 +195,72 @@ async def scan_pair(
     return_date: dt.date,
     timeout_ms: int,
     poll_wait_seconds: int = 30,
-    challenge_timeout_seconds: int = 25,
+    challenge_timeout_seconds: int = 0,
+    attended: bool = False,
 ) -> dict[str, Any]:
-    """Navigate to Skyscanner, handle consent/challenges gracefully, and extract flight fares."""
+    """Navigate to Skyscanner, verify provider completion, and extract authoritative fares.
+
+    Guarantees:
+    - Requests and responses scoped to current query and attempt (rejects stale/unrelated GraphQL).
+    - Explicit provider completion (backend signal) AND DOM final rendering (skeletons=0, cards>0).
+    - Timeouts or unverified evidence result in status=completion_unverified with null published fare.
+    - Final authoritative snapshot replaces intermediate results to prevent obsolete low fares.
+    """
+    attempt_start = time.monotonic()
     captured_payloads: list[dict[str, Any]] = []
     search_complete_event = asyncio.Event()
+    request_start_times: dict[Any, float] = {}
+
+    def handle_request(request: Request) -> None:
+        request_start_times[request] = time.monotonic()
 
     async def handle_response(response: Response) -> None:
         try:
+            req_start = request_start_times.get(response.request)
+            if req_start is not None and req_start < attempt_start:
+                return  # Reject stale response from a prior attempt
+
             url_lowered = response.url.lower()
-            if "web-unified-search" in url_lowered or "graphql" in url_lowered:
-                if response.status == 200 and "application/json" in response.headers.get("content-type", ""):
-                    body = await response.json()
-                    captured_payloads.append(body)
-                    # Detect backend scan completion signal in XHR payload
-                    status = body.get("status")
-                    context_obj = body.get("context") or body.get("itineraries", {}).get("context", {})
-                    ctx_status = context_obj.get("status") if isinstance(context_obj, dict) else None
-                    query_status = body.get("query_status") or body.get("searchStatus")
-                    if any(
-                        str(s).upper() in ("COMPLETE", "COMPLETED", "FINISHED")
-                        for s in (status, ctx_status, query_status)
-                        if s
-                    ):
-                        search_complete_event.set()
+            is_unified = "web-unified-search" in url_lowered or "/unified-search/" in url_lowered
+            is_graphql = "graphql" in url_lowered
+            if not (is_unified or is_graphql):
+                return
+
+            if response.status != 200 or "application/json" not in response.headers.get("content-type", ""):
+                return
+
+            body = await response.json()
+            if not isinstance(body, dict):
+                return
+
+            if is_graphql:
+                # Reject unrelated GraphQL (auth, analytics, account, telemetry)
+                has_flight_data = (
+                    "itineraries" in body
+                    or "flightSearch" in body
+                    or "flight_search" in str(body.get("data", "")).lower()
+                    or "itineraries" in str(body.get("data", "")).lower()
+                )
+                if not has_flight_data:
+                    return
+
+            captured_payloads.append(body)
+
+            # Detect backend scan completion signal in XHR payload
+            status = body.get("status")
+            context_obj = body.get("context") or body.get("itineraries", {}).get("context", {})
+            ctx_status = context_obj.get("status") if isinstance(context_obj, dict) else None
+            query_status = body.get("query_status") or body.get("searchStatus")
+            if any(
+                str(s).upper() in ("COMPLETE", "COMPLETED", "FINISHED")
+                for s in (status, ctx_status, query_status)
+                if s
+            ):
+                search_complete_event.set()
         except Exception:
             pass
 
+    page.on("request", handle_request)
     page.on("response", handle_response)
     query_url = flight_search_url(origin, destination, departure, return_date)
 
@@ -181,7 +268,10 @@ async def scan_pair(
         try:
             await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
         except Exception:
-            await page.goto(query_url, timeout=timeout_ms)
+            try:
+                await page.goto(query_url, timeout=timeout_ms)
+            except Exception:
+                pass
 
         # Cookie consent dialog handling
         try:
@@ -189,44 +279,38 @@ async def scan_pair(
                 btn = page.get_by_role("button", name=btn_name, exact=False)
                 if await btn.count() > 0 and await btn.first.is_visible():
                     await btn.first.click(timeout=2000)
-                    await page.wait_for_timeout(500)
                     break
         except Exception:
             pass
 
-        # Check for challenge / bot detection
+        # Pre-completion challenge check
         page_text = await page.locator("body").inner_text()
-        if is_challenge_page(page.url, page_text):
-            print("[Skyscanner] Anti-bot challenge detected. Attempting automated session reset...", flush=True)
-            await reset_session(page)
-            try:
-                await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                await page.wait_for_timeout(2000)
-                page_text = await page.locator("body").inner_text()
-            except Exception:
-                pass
+        page_text = await _handle_challenge(
+            page,
+            page_text,
+            query_url,
+            timeout_ms=timeout_ms,
+            challenge_timeout_seconds=challenge_timeout_seconds,
+            attended=attended,
+        )
 
         if is_challenge_page(page.url, page_text):
-            print(
-                "\n" + "!" * 70 + "\n"
-                "[ACTION REQUIRED] Skyscanner anti-bot challenge detected in the visible browser window!\n"
-                "Please press and hold the verification button in Chrome to continue.\n"
-                f"Waiting up to {challenge_timeout_seconds} seconds for verification...\n"
-                + "!" * 70,
-                flush=True,
+            obs = make_observation(
+                origin=origin,
+                destination=destination,
+                departure=departure,
+                return_date=return_date,
+                page_url=page.url,
+                page_text=page_text,
+                xhr_candidates=[],
+                dom_candidates=[],
+                status="user_action_required",
             )
-            elapsed = 0
-            while elapsed < challenge_timeout_seconds:
-                await page.wait_for_timeout(2000)
-                elapsed += 2
-                page_text = await page.locator("body").inner_text()
-                if not is_challenge_page(page.url, page_text):
-                    print(f"\n[RESOLVED] Challenge passed after {elapsed}s! Resuming search.", flush=True)
-                    break
-            else:
-                print("\n[TIMEOUT] Challenge was not resolved within allotted time.", file=sys.stderr, flush=True)
+            obs["page_url"] = page.url
+            obs["visible_page_text"] = page_text[:2000]
+            return obs
 
-        # Wait for initial search view or challenge to appear
+        # Initial wait for search view
         try:
             await page.wait_for_function(
                 """() => {
@@ -240,160 +324,168 @@ async def scan_pair(
                     const tabs = document.querySelector("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i]");
                     return !!(pb || cards || skeletons || tabs || /results|tulosta|halvin|cheapest|direct|stops/i.test(text));
                 }""",
-                timeout=min(timeout_ms, 15000),
+                timeout=min(timeout_ms, 12000),
             )
         except Exception:
             pass
 
-        # Switch to "Cheapest" / "Halvin" tab early so the view prioritizes the lowest fares
+        # Switch to "Cheapest" / "Halvin" tab once
         try:
-            cheapest_tab = page.locator("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]")
+            cheapest_tab = page.locator(
+                "[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], "
+                "label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), "
+                "button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]"
+            )
             if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
                 await cheapest_tab.first.click(timeout=1500)
         except Exception:
             pass
 
-        # Dynamic event-driven wait for the EXACT sign that all prices are scanned.
-        # Skyscanner visual completion signs:
-        # A) Progress bar reaches 100% (aria-valuenow == 100 or aria-valuenow == aria-valuemax, or Checked X of X)
-        # B) Progress bar disappears / hides after scan
-        # C) All shimmer/skeleton placeholders have vanished (count === 0)
-        # D) Flight cards or confirmed result state is rendered in the DOM
-        # E) Conductor / unified-search XHR reports completion status
-        # Scrapes the very millisecond the completion sign appears with ZERO second-guessing.
-        try:
-            completion_waiter = page.wait_for_function(
-                """() => {
-                    const text = document.body ? document.body.innerText.toLowerCase() : '';
-                    if (text.includes('person or a robot') || text.includes('robotti') || text.includes('press & hold')) {
-                        return 'challenge';
+        # Wait for BOTH: explicit provider completion AND final rendering
+        completion_waiter = page.wait_for_function(
+            """() => {
+                const text = document.body ? document.body.innerText.toLowerCase() : '';
+                if (text.includes('person or a robot') || text.includes('robotti') || text.includes('press & hold')) {
+                    return 'challenge';
+                }
+
+                // 1. Progress bar must indicate complete
+                const pb = document.querySelector("[role='progressbar'], [class*='ProgressBar'], [class*='progress-bar'], [class*='BpkProgress']");
+                const isPbVisible = pb && (pb.offsetParent !== null || window.getComputedStyle(pb).display !== 'none');
+                if (isPbVisible) {
+                    const val = pb.getAttribute('aria-valuenow');
+                    const max = pb.getAttribute('aria-valuemax') || '100';
+                    if (val && max && Number(val) >= Number(max)) {
+                        return 'progress_100';
                     }
-
-                    // 1. Check progress bar state
-                    const pb = document.querySelector("[role='progressbar'], [class*='ProgressBar'], [class*='progress-bar'], [class*='BpkProgress']");
-                    const isPbVisible = pb && (pb.offsetParent !== null || window.getComputedStyle(pb).display !== 'none');
-
-                    if (isPbVisible) {
-                        const val = pb.getAttribute('aria-valuenow');
-                        const max = pb.getAttribute('aria-valuemax') || '100';
-                        if (val && max && Number(val) >= Number(max)) {
-                            return 'progress_100';
-                        }
-                        const label = pb.getAttribute('aria-label') || '';
-                        const match = label.match(/(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/i);
-                        if (match && Number(match[1]) >= Number(match[2])) {
-                            return 'progress_all_providers';
-                        }
-                        // Progress bar is actively scanning
-                        return false;
+                    const label = pb.getAttribute('aria-label') || '';
+                    const match = label.match(/(\\d+)\\s*(?:of|\\/)\\s*(\\d+)/i);
+                    if (match && Number(match[1]) >= Number(match[2])) {
+                        return 'progress_all_providers';
                     }
-
-                    // 2. When progress bar is no longer visible, verify results settled
-                    const cards = document.querySelectorAll(
-                        "div[class*='Ticket'], div[class*='Card'], [data-testid*='itinerary'], [data-testid='flight-card']"
-                    );
-                    const skeletons = document.querySelectorAll(
-                        "[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton'], [data-testid*='skeleton']"
-                    );
-
-                    // Visual sign: cards exist and zero skeletons remain
-                    if (cards.length > 0 && skeletons.length === 0) {
-                        return 'results_settled';
-                    }
-
-                    // Empty results confirmed
-                    if (text.includes('ei tuloksia') || text.includes('no results found') || text.includes('no flights found') || text.includes('mitään ei löytynyt')) {
-                        return 'no_results';
-                    }
-
                     return false;
-                }""",
-                timeout=timeout_ms,
-            )
+                }
 
+                // 2. Skeletons must be completely gone
+                const skeletons = document.querySelectorAll(
+                    "[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton'], [data-testid*='skeleton']"
+                );
+                if (skeletons.length > 0) {
+                    return false;
+                }
+
+                // 3. Cards must exist
+                const cards = document.querySelectorAll(
+                    "div[class*='Ticket'], div[class*='Card'], [data-testid*='itinerary'], [data-testid='flight-card']"
+                );
+                if (cards.length > 0) {
+                    return 'results_settled';
+                }
+
+                // Empty results confirmed
+                if (text.includes('ei tuloksia') || text.includes('no results found') || text.includes('no flights found') || text.includes('mitään ei löytynyt')) {
+                    return 'no_results';
+                }
+
+                return false;
+            }""",
+            timeout=timeout_ms,
+        )
+
+        dom_task = asyncio.create_task(completion_waiter)
+        xhr_task = asyncio.create_task(search_complete_event.wait())
+        provider_completed = False
+        dom_settled = False
+
+        try:
             done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(completion_waiter),
-                    asyncio.create_task(search_complete_event.wait()),
-                ],
+                [dom_task, xhr_task],
+                timeout=timeout_ms / 1000,
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if pending:
+                done2, _ = await asyncio.wait(pending, timeout=2.0)
+                done = done | done2
+
             for t in pending:
                 t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
-            # If XHR finished first, ensure DOM skeletons have settled
-            try:
-                await page.wait_for_function(
-                    """() => {
-                        const skeletons = document.querySelectorAll("[class*='TicketPlaceholder'], [class*='placeholder'], [class*='shimmer'], [class*='skeleton'], [data-testid*='skeleton']");
-                        return skeletons.length === 0;
-                    }""",
-                    timeout=3000,
-                )
-            except Exception:
-                pass
+            if dom_task in done and not dom_task.cancelled():
+                try:
+                    res = dom_task.result()
+                    dom_settled = bool(res and res != "challenge")
+                except Exception:
+                    dom_settled = False
 
+            if xhr_task in done and not xhr_task.cancelled():
+                try:
+                    xhr_task.result()
+                    provider_completed = search_complete_event.is_set()
+                except Exception:
+                    provider_completed = False
+            elif search_complete_event.is_set():
+                provider_completed = True
         except Exception:
             pass
 
-        # Re-ensure "Cheapest" tab is active after all results loaded
-        try:
-            cheapest_tab = page.locator("[data-testid='FqsTab_CHEAPEST'], [id*='radio:CHEAPEST'], [data-testid*='CHEAPEST' i], label:has-text('Cheapest'), label:has-text('Halvin'), button:has-text('Cheapest'), button:has-text('Halvin'), [aria-label*='Halvin' i], [aria-label*='Cheapest' i]")
-            if await cheapest_tab.count() > 0 and await cheapest_tab.first.is_visible():
-                await cheapest_tab.first.click(timeout=1500)
-                await page.wait_for_timeout(500)
-        except Exception:
-            pass
-
-        # Scroll down slightly to trigger hydration of DOM cards
+        # Scroll to hydrate DOM cards
         try:
             await page.evaluate("window.scrollBy(0, 600)")
-            await page.wait_for_timeout(500)
         except Exception:
             pass
 
         page_text = await page.locator("body").inner_text()
-
-        # Check for challenge / bot detection after polling as well
-        if is_challenge_page(page.url, page_text):
-            print("[Skyscanner] Anti-bot challenge detected after poll. Attempting automated session reset...", flush=True)
-            await reset_session(page)
-            try:
-                await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                await page.wait_for_timeout(3000)
-                page_text = await page.locator("body").inner_text()
-            except Exception:
-                pass
+        page_text = await _handle_challenge(
+            page,
+            page_text,
+            query_url,
+            timeout_ms=timeout_ms,
+            challenge_timeout_seconds=challenge_timeout_seconds,
+            attended=attended,
+        )
 
         if is_challenge_page(page.url, page_text):
-            print(
-                "\n" + "!" * 70 + "\n"
-                "[ACTION REQUIRED] Skyscanner anti-bot challenge detected in the visible browser window!\n"
-                "Please press and hold the verification button in Chrome to continue.\n"
-                f"Waiting up to {challenge_timeout_seconds} seconds for verification...\n"
-                + "!" * 70,
-                flush=True,
+            obs = make_observation(
+                origin=origin,
+                destination=destination,
+                departure=departure,
+                return_date=return_date,
+                page_url=page.url,
+                page_text=page_text,
+                xhr_candidates=[],
+                dom_candidates=[],
+                status="user_action_required",
             )
-            elapsed = 0
-            while elapsed < challenge_timeout_seconds:
-                await page.wait_for_timeout(2000)
-                elapsed += 2
-                page_text = await page.locator("body").inner_text()
-                if not is_challenge_page(page.url, page_text):
-                    print(f"\n[RESOLVED] Challenge passed after {elapsed}s! Re-fetching results for {origin}->{destination}...", flush=True)
-                    try:
-                        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                        await page.wait_for_timeout(4000)
-                    except Exception:
-                        pass
-                    page_text = await page.locator("body").inner_text()
-                    break
-            else:
-                print("\n[TIMEOUT] Challenge was not resolved within allotted time.", file=sys.stderr, flush=True)
+            obs["page_url"] = page.url
+            obs["visible_page_text"] = page_text[:2000]
+            return obs
 
-        # Parse captured data
-        xhr_results = extract_from_xhr_payloads(captured_payloads)
-        dom_cards = await extract_dom_candidate_cards(page)
+        # Authoritative snapshot vs unverified/timeout
+        if provider_completed or dom_settled:
+            final_payload = captured_payloads[-1] if captured_payloads else None
+            xhr_results = extract_from_xhr_payloads([final_payload]) if final_payload else []
+            dom_cards = await extract_dom_candidate_cards(page)
+            tab_price = cheapest_tab_price(page_text)
+            authoritative_fare = select_authoritative_fare(
+                final_payload=final_payload,
+                dom_cards=dom_cards,
+                tab_price=tab_price,
+            )
+            if authoritative_fare is not None:
+                status = "observed"
+                completion_evidence = "xhr_complete+dom_settled" if (provider_completed and dom_settled) else ("dom_settled" if dom_settled else "xhr_complete")
+            else:
+                status = "incomplete"
+                completion_evidence = None
+        else:
+            final_payload = None
+            xhr_results = []
+            dom_cards = []
+            authoritative_fare = None
+            status = "completion_unverified"
+            completion_evidence = None
 
         observation = make_observation(
             origin=origin,
@@ -404,6 +496,9 @@ async def scan_pair(
             page_text=page_text,
             xhr_candidates=xhr_results,
             dom_candidates=dom_cards,
+            status=status,
+            completion_evidence=completion_evidence,
+            authoritative_fare_eur=authoritative_fare,
         )
         if observation["status"] != "observed":
             observation["page_url"] = page.url
@@ -412,6 +507,7 @@ async def scan_pair(
         return observation
 
     finally:
+        page.remove_listener("request", handle_request)
         page.remove_listener("response", handle_response)
 
 
@@ -464,26 +560,51 @@ async def run(args: argparse.Namespace) -> int:
                 "--disable-infobars",
             ],
         )
-        await context.add_cookies([
-            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.net", "path": "/"},
-            {"name": "ssculture", "value": "locale:::fi-FI&market:::FI&currency:::EUR", "domain": ".skyscanner.fi", "path": "/"},
-        ])
+        await context.add_cookies(SKYSCANNER_COOKIES)
         page = context.pages[0] if context.pages else await context.new_page()
 
-        # Clean session warm-up: clear any stale perimeterX cookies and warm up on homepage
-        await reset_session(page)
+        start_time = time.monotonic()
+        budget_seconds = getattr(args, "runtime_budget_seconds", cfg.execution.runtime_budget_seconds)
+        deadline = start_time + budget_seconds
+        consecutive_blocks = 0
+        run_interrupted = False
 
         try:
             for index, (departure, return_date) in enumerate(pairs, start=1):
                 pair_file = results_dir / f"{departure}_{return_date}.json"
+
+                # Check runtime budget
+                if time.monotonic() >= deadline:
+                    print(
+                        f"\n[Skyscanner] Runtime budget of {budget_seconds}s exhausted. Deferring remaining pairs...",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    run_interrupted = True
+                    for rem_dep, rem_ret in pairs[index - 1:]:
+                        d_obs = deferred_observation(
+                            source=SOURCE,
+                            origin=args.origin,
+                            destination=args.dest,
+                            departure=rem_dep,
+                            return_date=rem_ret,
+                            reason="runtime_budget_exhausted",
+                        )
+                        save_observation(results_dir, d_obs)
+                        observations.append(d_obs)
+                    report_json, report_csv = write_daily_report(results_dir, observations)
+                    break
+
                 if args.skip_existing and pair_file.exists():
                     try:
                         cached = json.loads(pair_file.read_text(encoding="utf-8"))
-                        if (
-                            cached.get("status") == "observed"
-                            and str(cached.get("fetched_at", "")).startswith(stamp)
-                            and cached.get("origin") == args.origin
-                            and cached.get("destination") == args.dest
+                        if is_valid_completion_cache(
+                            cached,
+                            stamp=stamp,
+                            origin=args.origin,
+                            dest=args.dest,
+                            departure_date=departure,
+                            return_date=return_date,
                         ):
                             print(
                                 f"[Skyscanner] [{index}/{len(pairs)}] {departure} -> {return_date} "
@@ -491,13 +612,18 @@ async def run(args: argparse.Namespace) -> int:
                             )
                             observations.append(cached)
                             report_json, report_csv = write_daily_report(results_dir, observations)
+                            consecutive_blocks = 0
                             continue
                     except Exception:
                         pass
 
                 print(f"[Skyscanner] [{index}/{len(pairs)}] {departure} -> {return_date}")
-                max_retries = 2
+                max_retries = 1
                 attempt = 0
+                query_start = time.monotonic()
+                rem_time = max(5.0, deadline - time.monotonic())
+                effective_timeout_ms = min(args.timeout_seconds * 1000, int(rem_time * 1000))
+
                 while attempt <= max_retries:
                     attempt += 1
                     try:
@@ -507,9 +633,10 @@ async def run(args: argparse.Namespace) -> int:
                             destination=args.dest,
                             departure=departure,
                             return_date=return_date,
-                            timeout_ms=args.timeout_seconds * 1000,
+                            timeout_ms=effective_timeout_ms,
                             poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
                             challenge_timeout_seconds=args.challenge_timeout_seconds,
+                            attended=getattr(args, "attended", False),
                         )
                     except Exception as error:
                         observation = failed_observation(
@@ -532,59 +659,126 @@ async def run(args: argparse.Namespace) -> int:
                             flush=True,
                         )
                         await page.wait_for_timeout(cooloff * 1000)
-                        await reset_session(page)
+                        await reset_session(page, scrub_cookies=True)
 
+                query_elapsed = round(time.monotonic() - query_start, 2)
+                observation["query_elapsed_seconds"] = query_elapsed
                 saved = save_observation(results_dir, observation)
                 observations.append(observation)
                 report_json, report_csv = write_daily_report(results_dir, observations)
-                print(f"  {observation['status']}; lowest observed: €{observation['lowest_observed_price_eur']}; saved {saved.name}")
+                print(
+                    f"  {observation['status']}; lowest observed: €{observation['lowest_observed_price_eur']}; "
+                    f"elapsed: {query_elapsed}s; saved {saved.name}"
+                )
+
+                if observation["status"] in NEEDS_HUMAN:
+                    consecutive_blocks += 1
+                    if not getattr(args, "attended", False):
+                        cb_threshold = getattr(args, "circuit_breaker_threshold", 5)
+                        if circuit_breaker_tripped(consecutive_blocks, threshold=cb_threshold):
+                            print(
+                                f"\n[Skyscanner] Circuit breaker tripped after {consecutive_blocks} consecutive challenges. "
+                                "Deferring remaining pairs...",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            run_interrupted = True
+                            for rem_dep, rem_ret in pairs[index:]:
+                                d_obs = deferred_observation(
+                                    source=SOURCE,
+                                    origin=args.origin,
+                                    destination=args.dest,
+                                    departure=rem_dep,
+                                    return_date=rem_ret,
+                                    reason="circuit_breaker_tripped",
+                                )
+                                save_observation(results_dir, d_obs)
+                                observations.append(d_obs)
+                            report_json, report_csv = write_daily_report(results_dir, observations)
+                            return 2
+                else:
+                    consecutive_blocks = 0
 
                 if index < len(pairs):
-                    jitter = random.uniform(1.0, 4.0)
+                    jitter = random.uniform(1.0, 3.0)
                     pause_s = args.delay_seconds + jitter
                     print(f"  [Politeness pause: {pause_s:.1f}s]")
                     await page.wait_for_timeout(pause_s * 1000)
 
-            # Final sweep pass: retry any remaining flagged pairs once more
-            flagged = [obs for obs in observations if obs.get("status") in NEEDS_HUMAN]
-            if flagged:
-                print(f"\n[Skyscanner] Starting final retry sweep for {len(flagged)} flagged pair(s)...", flush=True)
-                for sw_idx, fl in enumerate(flagged, 1):
-                    dep = dt.date.fromisoformat(fl["departure_date"])
-                    ret = dt.date.fromisoformat(fl["return_date"])
-                    print(f"[Skyscanner] [Sweep {sw_idx}/{len(flagged)}] Retrying {dep} -> {ret}...")
-                    try:
-                        await reset_session(page)
-                        sw_obs = await scan_pair(
-                            page,
-                            origin=args.origin,
-                            destination=args.dest,
-                            departure=dep,
-                            return_date=ret,
-                            timeout_ms=args.timeout_seconds * 1000,
-                            poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
-                            challenge_timeout_seconds=args.challenge_timeout_seconds,
-                        )
-                        if sw_obs["status"] not in NEEDS_HUMAN:
-                            save_observation(results_dir, sw_obs)
-                            for i, obs_item in enumerate(observations):
-                                if obs_item.get("departure_date") == fl["departure_date"] and obs_item.get("return_date") == fl["return_date"]:
-                                    observations[i] = sw_obs
+            # Second-pass sweep: retry any unverified or challenged pairs from this run
+            if not run_interrupted and time.monotonic() < deadline - 60:
+                unverified_entries = [
+                    (i, obs)
+                    for i, obs in enumerate(observations)
+                    if obs.get("status") in ("user_action_required", "incomplete", "completion_unverified")
+                ]
+                if unverified_entries:
+                    print(
+                        f"\n[Skyscanner] Starting second-pass sweep on {len(unverified_entries)} unverified pairs after a 20s cooldown...",
+                        flush=True,
+                    )
+                    await page.wait_for_timeout(20000)
+                    await reset_session(page, scrub_cookies=True)
+
+                    for obs_idx, old_obs in unverified_entries:
+                        if time.monotonic() >= deadline:
+                            break
+                        dep_str = old_obs.get("departure_date")
+                        ret_str = old_obs.get("return_date")
+                        if not dep_str or not ret_str:
+                            continue
+                        dep_date = dt.date.fromisoformat(dep_str)
+                        ret_date = dt.date.fromisoformat(ret_str)
+                        print(f"[Skyscanner] [Sweep] Retrying {dep_date} -> {ret_date}...")
+                        try:
+                            rem_time = max(5.0, deadline - time.monotonic())
+                            sweep_timeout_ms = min(args.timeout_seconds * 1000, int(rem_time * 1000))
+                            sweep_obs = await scan_pair(
+                                page,
+                                origin=args.origin,
+                                destination=args.dest,
+                                departure=dep_date,
+                                return_date=ret_date,
+                                timeout_ms=sweep_timeout_ms,
+                                poll_wait_seconds=getattr(args, "poll_wait_seconds", 30),
+                                challenge_timeout_seconds=args.challenge_timeout_seconds,
+                                attended=getattr(args, "attended", False),
+                            )
+                        except Exception as err:
+                            sweep_obs = failed_observation(
+                                origin=args.origin,
+                                destination=args.dest,
+                                departure=dep_date,
+                                return_date=ret_date,
+                                error=err,
+                            )
+
+                        if sweep_obs.get("status") == "observed":
+                            print(f"  [Sweep Success] {dep_date} -> {ret_date}: €{sweep_obs['lowest_observed_price_eur']}")
+                            save_observation(results_dir, sweep_obs)
+                            observations[obs_idx] = sweep_obs
                             report_json, report_csv = write_daily_report(results_dir, observations)
-                            print(f"  [Sweep Recovered!] {sw_obs['status']}; lowest observed: €{sw_obs['lowest_observed_price_eur']}")
-                    except Exception as sw_err:
-                        print(f"  [Sweep Failed]: {sw_err}", file=sys.stderr)
-                    await page.wait_for_timeout(args.delay_seconds * 1000)
+                        else:
+                            print(f"  [Sweep Result] {dep_date} -> {ret_date}: {sweep_obs.get('status')}")
+
+                        await page.wait_for_timeout(random.uniform(5.0, 8.0) * 1000)
 
         finally:
             await context.close()
 
     print(f"\n[Skyscanner] Daily Skyscanner report written: {report_json.name}, {report_csv.name}")
-    failed_count = sum(1 for obs in observations if obs.get("status") != "observed")
-    if observations and failed_count == len(observations):
-        return 2
-    if failed_count > 0:
-        return 1
+    total_scanned = len(pairs)
+    total_observed = sum(1 for obs in observations if obs.get("status") == "observed")
+    total_deferred = sum(1 for obs in observations if obs.get("status") == "deferred")
+    total_failed = len(observations) - total_observed - total_deferred
+    total_elapsed = round(time.monotonic() - start_time, 2)
+    print(
+        f"\n[Skyscanner] Run summary: elapsed={total_elapsed}s; "
+        f"coverage: observed={total_observed}/{total_scanned}, deferred={total_deferred}, failed={total_failed}"
+    )
+
+    if run_interrupted or total_observed < total_scanned:
+        return 2 if consecutive_blocks >= 2 else 1
     return 0
 
 
@@ -621,6 +815,24 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--timeout-seconds", type=int, default=cfg.skyscanner.timeout_seconds, help="Page load timeout in seconds")
     res.add_argument("--poll-wait-seconds", type=int, default=cfg.skyscanner.poll_wait_seconds, help="Wait time in seconds for Skyscanner provider polling")
     res.add_argument("--challenge-timeout-seconds", type=int, default=cfg.skyscanner.challenge_timeout_seconds, help="Wait time for human challenge solver")
+    res.add_argument(
+        "--runtime-budget-seconds",
+        type=int,
+        default=cfg.execution.runtime_budget_seconds,
+        help="Maximum per-scraper runtime budget in seconds (default 1800)",
+    )
+    res.add_argument(
+        "--circuit-breaker-threshold",
+        type=int,
+        default=5,
+        help="Consecutive challenges before tripping circuit breaker (default 5)",
+    )
+    res.add_argument(
+        "--attended",
+        action=argparse.BooleanOptionalAction,
+        default=cfg.skyscanner.attended,
+        help="Wait for human intervention on anti-bot challenges",
+    )
     res.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=cfg.execution.skip_existing, help="Skip queries already observed today")
     res.add_argument("--profile-dir", default=str(cfg.skyscanner.resolved_profile_dir()))
     res.add_argument("--results-dir", default=str(cfg.skyscanner.resolved_results_dir()))

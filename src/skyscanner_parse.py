@@ -10,7 +10,14 @@ import datetime as dt
 import re
 from typing import Any
 
-from src.common import PRICE_RE, PRICE_SUFFIX_RE, duration_minutes, parse_numeric_price
+from src.common import (
+    COMPLETION_VERSION,
+    PRICE_RE,
+    PRICE_SUFFIX_RE,
+    duration_minutes,
+    is_valid_eur_fare,
+    parse_numeric_price,
+)
 
 SKYSCANNER_BASE = "https://www.skyscanner.fi"
 SOURCE = "Skyscanner UI"
@@ -54,13 +61,29 @@ def flight_search_url(
     )
 
 
+ANCILLARY_TERMS = (
+    "baggage", "bag", "bags", "seat", "seats", "carry-on", "carryon",
+    "laukku", "istuin", "matkatavara", "maksu", "fee", "fees",
+)
+
+
 def money_values(text: str) -> list[float]:
-    """Find all potential flight price figures in euro format."""
+    """Find valid flight price figures in euro format, excluding ancillary fees."""
     values: list[float] = []
-    for match in PRICE_RE.findall(text) + PRICE_SUFFIX_RE.findall(text):
-        num = parse_numeric_price(match)
-        if num is not None:
-            values.append(num)
+    for pattern in (PRICE_RE, PRICE_SUFFIX_RE):
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            preceding = text[max(0, start - 25):start].lower()
+            trailing = text[end:min(len(text), end + 20)].lower()
+            if any(
+                re.search(rf"\b{re.escape(w)}\b", preceding) or re.search(rf"\b{re.escape(w)}\b", trailing)
+                for w in ANCILLARY_TERMS
+            ):
+                continue
+            raw = match.group(1) if match.groups() else match.group(0)
+            num = parse_numeric_price(raw)
+            if num is not None and is_valid_eur_fare(num):
+                values.append(num)
     return values
 
 
@@ -75,11 +98,15 @@ def is_challenge_page(url: str, text: str) -> bool:
         for phrase in (
             "robotti",
             "press & hold",
+            "press and hold",
             "verify you are human",
             "unusual traffic",
             "oletko oikea henkilö vai robotti",
             "person or a robot",
             "are you a person",
+            "paina ja pidä",
+            "paina ja pidä painettuna",
+            "vahvista että olet ihminen",
         )
     ):
         return True
@@ -179,6 +206,36 @@ def extract_from_xhr_payloads(payloads: list[dict[str, Any]]) -> list[dict[str, 
     return results
 
 
+def select_authoritative_fare(
+    final_payload: dict[str, Any] | None,
+    intermediate_payloads: list[dict[str, Any]] | None = None,
+    dom_cards: list[str] | None = None,
+    tab_price: float | None = None,
+) -> float | None:
+    """Select the authoritative lowest fare from the completed search state.
+
+    The final authoritative payload replaces any intermediate results to prevent
+    preserving obsolete or retracted lower prices.
+    """
+    if final_payload:
+        results = extract_from_xhr_payloads([final_payload])
+        if results:
+            prices = [r["price_eur"] for r in results if is_valid_eur_fare(r.get("price_eur"))]
+            if prices:
+                return min(prices)
+    if tab_price is not None and is_valid_eur_fare(tab_price):
+        return tab_price
+    if dom_cards:
+        dom_prices: list[float] = []
+        for card in dom_cards:
+            for p in money_values(card):
+                if is_valid_eur_fare(p):
+                    dom_prices.append(p)
+        if dom_prices:
+            return min(dom_prices)
+    return None
+
+
 def make_observation(
     *,
     origin: str,
@@ -189,33 +246,36 @@ def make_observation(
     page_text: str,
     xhr_candidates: list[dict[str, Any]],
     dom_candidates: list[str],
+    status: str | None = None,
+    completion_evidence: str | None = None,
+    authoritative_fare_eur: float | None = None,
 ) -> dict[str, Any]:
-    """Construct structured, persistent observation dictionary."""
-    status = page_status(page_url, page_text)
+    """Construct structured, persistent observation dictionary with completion evidence."""
+    if status is None:
+        status = page_status(page_url, page_text)
 
-    observed_prices: list[float] = []
-    tab_price = cheapest_tab_price(page_text)
-    if tab_price is not None and tab_price > 0:
-        observed_prices.append(tab_price)
+    if status == "observed":
+        if authoritative_fare_eur is not None and is_valid_eur_fare(authoritative_fare_eur):
+            lowest_price = authoritative_fare_eur
+        elif xhr_candidates:
+            xhr_prices = [c["price_eur"] for c in xhr_candidates if is_valid_eur_fare(c.get("price_eur"))]
+            lowest_price = min(xhr_prices) if xhr_prices else None
+        else:
+            tab_p = cheapest_tab_price(page_text)
+            if tab_p is not None and is_valid_eur_fare(tab_p):
+                lowest_price = tab_p
+            elif dom_candidates:
+                dom_prices = [p for b in dom_candidates for p in money_values(b) if is_valid_eur_fare(p)]
+                lowest_price = min(dom_prices) if dom_prices else None
+            else:
+                lowest_price = None
 
-    for c in xhr_candidates:
-        p = c.get("price_eur")
-        if p is not None and float(p) > 0:
-            observed_prices.append(float(p))
-
-    for block in dom_candidates:
-        for p in money_values(block):
-            if p > 0:
-                observed_prices.append(p)
-
-    if not observed_prices and status == "observed":
-        for p in money_values(page_text):
-            if p > 0:
-                observed_prices.append(p)
-
-    lowest_price: float | None = min(observed_prices) if observed_prices else None
-    if lowest_price is None and status == "observed":
-        status = "incomplete"
+        if lowest_price is None:
+            status = "incomplete"
+            completion_evidence = None
+    else:
+        lowest_price = None
+        completion_evidence = None
 
     return {
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -227,6 +287,8 @@ def make_observation(
         "stay_nights": (return_date - departure).days,
         "status": status,
         "lowest_observed_price_eur": lowest_price,
+        "completion_version": COMPLETION_VERSION,
+        "completion_evidence": completion_evidence,
         "protection_label": "not_flagged_by_skyscanner",
         "seller_confirmation_required": True,
         "itinerary_count": len(xhr_candidates) or len(dom_candidates),

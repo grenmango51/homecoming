@@ -7,6 +7,7 @@ and common string/price/duration parsers.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import os
 import re
 import sys
@@ -134,3 +135,119 @@ def duration_minutes(value: str) -> int | None:
     if not match:
         return None
     return int(match.group(1)) * 60 + int(match.group(2) or 0)
+
+
+# ---------------------------------------------------------------------------
+# Completion evidence and fare validation (browser-free policy helpers)
+# ---------------------------------------------------------------------------
+
+# Bumped when completion/cache semantics change; old caches without this
+# version are automatically re-queried by skip-existing logic.
+COMPLETION_VERSION = 3
+
+
+def is_valid_eur_fare(price: object) -> bool:
+    """True when *price* is a positive, finite EUR fare under a plausible ceiling."""
+    if isinstance(price, bool) or not isinstance(price, (int, float)):
+        return False
+    return math.isfinite(price) and 0.01 <= price <= 100_000.0
+
+
+def circuit_breaker_tripped(
+    consecutive_blocks: int, threshold: int = 2
+) -> bool:
+    """True when the scraper should stop retrying after *threshold* consecutive blocks."""
+    return consecutive_blocks >= threshold
+
+
+def is_valid_completion_cache(
+    cached: dict,
+    *,
+    stamp: str,
+    origin: str,
+    dest: str,
+    departure_date: str | dt.date | None = None,
+    return_date: str | dt.date | None = None,
+    completion_version: int = COMPLETION_VERSION,
+    extra_match: dict[str, object] | None = None,
+) -> bool:
+    """True when a cached observation is verified complete and valid for today's run.
+
+    Rejects observations saved by older code that lacked completion
+    verification (no ``completion_version`` key or a lower version),
+    records without completion evidence, invalid published fares, or
+    missing/mismatched extra fields (e.g. POS / dates).
+    """
+    if not isinstance(cached, dict):
+        return False
+    if cached.get("status") != "observed":
+        return False
+    if not str(cached.get("fetched_at", "")).startswith(stamp):
+        return False
+    if cached.get("origin") != origin or cached.get("destination") != dest:
+        return False
+
+    if departure_date is not None:
+        dep_str = departure_date.isoformat() if isinstance(departure_date, dt.date) else str(departure_date)
+        if cached.get("departure_date") != dep_str:
+            return False
+    if return_date is not None:
+        ret_str = return_date.isoformat() if isinstance(return_date, dt.date) else str(return_date)
+        if cached.get("return_date") != ret_str:
+            return False
+
+    if cached.get("completion_version", 0) < completion_version:
+        return False
+
+    # Require valid completion evidence
+    evidence = cached.get("completion_evidence")
+    if not evidence or not isinstance(evidence, str) or not evidence.strip():
+        return False
+
+    # Require valid published fare
+    price = cached.get("lowest_observed_price_eur")
+    if not is_valid_eur_fare(price):
+        return False
+
+    # Strict matching on extra fields (e.g. POS / gl / market): missing keys must fail
+    if extra_match:
+        if not all(key in cached and cached[key] == value for key, value in extra_match.items()):
+            return False
+
+    return True
+
+
+def deferred_observation(
+    *,
+    source: str,
+    origin: str,
+    destination: str,
+    departure: dt.date | str,
+    return_date: dt.date | str | None,
+    reason: str,
+) -> dict:
+    """Placeholder for a pair skipped by circuit breaker or budget exhaustion.
+
+    Status is ``deferred`` — never ``observed``, so downstream reports and
+    skip-existing logic never treat it as successfully scanned coverage.
+    """
+    dep_str = departure.isoformat() if isinstance(departure, dt.date) else str(departure)
+    ret_str = return_date.isoformat() if isinstance(return_date, dt.date) else (str(return_date) if return_date else None)
+    stay = None
+    if isinstance(departure, dt.date) and isinstance(return_date, dt.date):
+        stay = (return_date - departure).days
+    return {
+        "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": source,
+        "origin": origin,
+        "destination": destination,
+        "departure_date": dep_str,
+        "return_date": ret_str,
+        "stay_nights": stay,
+        "status": "deferred",
+        "lowest_observed_price_eur": None,
+        "completion_version": COMPLETION_VERSION,
+        "completion_evidence": None,
+        "candidate_cards": [],
+        "notes": [reason],
+    }

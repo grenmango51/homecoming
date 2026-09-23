@@ -15,6 +15,7 @@ import asyncio
 import datetime as dt
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,14 @@ except ImportError as error:
     ) from error
 
 from src import browser, reporting
-from src.common import build_search_pairs, configure_stdio, resolve_browser_executable
+from src.common import (
+    build_search_pairs,
+    circuit_breaker_tripped,
+    configure_stdio,
+    deferred_observation,
+    is_valid_completion_cache,
+    resolve_browser_executable,
+)
 from src.config import PROJECT_ROOT, load_config
 from src.google_parse import (
     flight_search_url,
@@ -49,11 +57,11 @@ async def extract_candidate_cards(page: Page, curr: str = "EUR") -> list[dict[st
     return await browser.extract_cards(
         page,
         curr=curr,
-        selector=browser.DEFAULT_CARD_SELECTOR,
+        selector=browser.LISTITEM_CARD_SELECTOR,
         min_length=20,
         key_length=80,
-        limit=40,
-        scroll_steps=2,
+        limit=50,
+        scroll_steps=3,
         parser=parse_eur_card_details,
     )
 
@@ -73,24 +81,46 @@ async def scan_pair(
     try:
         await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
-        await page.goto(query_url, timeout=timeout_ms)
+        try:
+            await page.goto(query_url, timeout=timeout_ms)
+        except Exception:
+            pass
 
     # First-run consent screen for the dedicated profile. Choose the
     # privacy-preserving option and let Google remember it there.
     if await browser.dismiss_consent(page, timeout_ms=min(timeout_ms, 3_000)):
-        await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        try:
+            await page.goto(query_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
 
-    text = await browser.wait_for_results(page, timeout_ms)
+    try:
+        text = await browser.wait_for_results(page, timeout_ms)
+    except TimeoutError:
+        page_t = await browser.page_text(page)
+        observation = make_observation(
+            origin=origin,
+            destination=destination,
+            departure=departure,
+            return_date=return_date,
+            page_text=page_t,
+            candidates=[],
+            status="timeout",
+        )
+        observation["gl"] = gl
+        observation["page_url"] = page.url
+        observation["visible_page_text"] = page_t[:2000]
+        return observation
 
     # Google sometimes renders an error card instead of results; its own Reload
     # button recovers faster than a fresh navigation.
     lowered = text.lower()
     if "something went wrong" in lowered or "no results returned" in lowered or page_status(text) == "incomplete":
-        if await browser.click_reload_if_present(page, settle_ms=3_500):
-            text = await browser.wait_for_results(page, timeout_ms)
-
-    if await browser.sort_by_price(page):
-        await page.wait_for_timeout(2_000)
+        if await browser.click_reload_if_present(page):
+            try:
+                text = await browser.wait_for_results(page, timeout_ms)
+            except TimeoutError:
+                pass
 
     candidates = await extract_candidate_cards(page)
 
@@ -160,20 +190,30 @@ def resolve_pairs(args: argparse.Namespace, cfg: Any) -> list[tuple[dt.date, dt.
 
 
 def cached_observation(
-    pair_file: Path, *, stamp: str, origin: str, dest: str, gl: str
+    pair_file: Path,
+    *,
+    stamp: str,
+    origin: str,
+    dest: str,
+    departure: dt.date,
+    return_date: dt.date,
+    gl: str,
 ) -> dict[str, Any] | None:
-    """Return today's saved observation for this pair when it is still valid."""
+    """Return today's saved observation for this pair when it is verified complete and valid."""
     cached = reporting.load_checkpoint(pair_file)
     if not cached:
         return None
-    matches = (
-        cached.get("status") == "observed"
-        and str(cached.get("fetched_at", "")).startswith(stamp)
-        and cached.get("origin") == origin
-        and cached.get("destination") == dest
-        and cached.get("gl", gl) == gl
-    )
-    return cached if matches else None
+    if is_valid_completion_cache(
+        cached,
+        stamp=stamp,
+        origin=origin,
+        dest=dest,
+        departure_date=departure,
+        return_date=return_date,
+        extra_match={"gl": gl},
+    ):
+        return cached
+    return None
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -206,6 +246,12 @@ async def run(args: argparse.Namespace) -> int:
 
     stamp = reporting.today_stamp()
     written_reports: list[tuple[str, Path, Path]] = []
+    start_time = time.monotonic()
+    budget_seconds = getattr(args, "runtime_budget_seconds", cfg.execution.runtime_budget_seconds)
+    deadline = start_time + budget_seconds
+    consecutive_blocks = 0
+    all_observations: list[dict[str, Any]] = []
+    run_interrupted = False
 
     async with async_playwright() as playwright:
         context = await browser.launch_google_context(
@@ -232,9 +278,39 @@ async def run(args: argparse.Namespace) -> int:
                     progress = f"[{index}/{len(pairs)}] {departure} -> {return_date}"
                     pair_file = cur_results_dir / reporting.pair_filename(departure, return_date)
 
+                    # Budget check
+                    if time.monotonic() >= deadline:
+                        print(
+                            f"[Google Flights] Runtime budget of {budget_seconds}s exhausted. Deferring remaining pairs...",
+                            file=sys.stderr,
+                        )
+                        run_interrupted = True
+                        for rem_dep, rem_ret in pairs[index - 1:]:
+                            d_obs = deferred_observation(
+                                source=SOURCE,
+                                origin=args.origin,
+                                destination=args.dest,
+                                departure=rem_dep,
+                                return_date=rem_ret,
+                                reason="runtime_budget_exhausted",
+                            )
+                            d_obs["gl"] = current_gl
+                            save_observation(cur_results_dir, d_obs)
+                            observations.append(d_obs)
+                            all_observations.append(d_obs)
+                        cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
+                        written_reports.append((current_gl, cur_report_json, cur_report_csv))
+                        break
+
                     if args.skip_existing:
                         cached = cached_observation(
-                            pair_file, stamp=stamp, origin=args.origin, dest=args.dest, gl=current_gl
+                            pair_file,
+                            stamp=stamp,
+                            origin=args.origin,
+                            dest=args.dest,
+                            departure=departure,
+                            return_date=return_date,
+                            gl=current_gl,
                         )
                         if cached:
                             print(
@@ -242,10 +318,15 @@ async def run(args: argparse.Namespace) -> int:
                                 f"(cached today: €{cached.get('lowest_observed_price_eur')})"
                             )
                             observations.append(cached)
+                            all_observations.append(cached)
                             cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
+                            consecutive_blocks = 0
                             continue
 
                     print(f"[Google Flights] {progress}")
+                    query_start = time.monotonic()
+                    rem_time = max(5.0, deadline - time.monotonic())
+                    effective_timeout_ms = min(args.timeout_seconds * 1000, int(rem_time * 1000))
                     try:
                         observation = await scan_pair(
                             page,
@@ -253,7 +334,7 @@ async def run(args: argparse.Namespace) -> int:
                             destination=args.dest,
                             departure=departure,
                             return_date=return_date,
-                            timeout_ms=args.timeout_seconds * 1000,
+                            timeout_ms=effective_timeout_ms,
                             gl=current_gl,
                         )
                     except Exception as error:
@@ -268,24 +349,58 @@ async def run(args: argparse.Namespace) -> int:
                         observation["page_url"] = page.url
                         observation["visible_page_text"] = (await browser.page_text(page))[:2000]
 
+                    query_elapsed = round(time.monotonic() - query_start, 2)
+                    observation["query_elapsed_seconds"] = query_elapsed
                     saved = save_observation(cur_results_dir, observation)
                     observations.append(observation)
+                    all_observations.append(observation)
                     cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
                     print(
                         f"  {observation['status']}; lowest observed: "
-                        f"{observation['lowest_observed_price_eur']}; saved {saved.name}"
+                        f"{observation['lowest_observed_price_eur']}; elapsed: {query_elapsed}s; saved {saved.name}"
                     )
 
                     if observation["status"] in NEEDS_HUMAN:
-                        print(
-                            "[Google Flights] Stopping: browser needs human action. Re-run after resolving it.",
-                            file=sys.stderr,
-                        )
-                        return 2
+                        consecutive_blocks += 1
+                        if not getattr(args, "attended", False):
+                            if circuit_breaker_tripped(consecutive_blocks, threshold=2):
+                                print(
+                                    f"\n[Google Flights] Circuit breaker tripped after {consecutive_blocks} consecutive challenges. "
+                                    "Deferring remaining pairs...",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                run_interrupted = True
+                                for rem_dep, rem_ret in pairs[index:]:
+                                    d_obs = deferred_observation(
+                                        source=SOURCE,
+                                        origin=args.origin,
+                                        destination=args.dest,
+                                        departure=rem_dep,
+                                        return_date=rem_ret,
+                                        reason="circuit_breaker_tripped",
+                                    )
+                                    d_obs["gl"] = current_gl
+                                    save_observation(cur_results_dir, d_obs)
+                                    observations.append(d_obs)
+                                    all_observations.append(d_obs)
+                                cur_report_json, cur_report_csv = write_daily_report(cur_results_dir, observations)
+                                written_reports.append((current_gl, cur_report_json, cur_report_csv))
+                                return 2
+                        else:
+                            print(
+                                "[Google Flights] Attended mode: browser needs human action.",
+                                file=sys.stderr,
+                            )
+                    else:
+                        consecutive_blocks = 0
+
                     if index < len(pairs):
                         await page.wait_for_timeout(args.delay_seconds * 1000)
 
                 written_reports.append((current_gl, cur_report_json, cur_report_csv))
+                if run_interrupted:
+                    break
                 if m_idx < len(gl_list):
                     await page.wait_for_timeout(args.delay_seconds * 1000)
         finally:
@@ -293,6 +408,19 @@ async def run(args: argparse.Namespace) -> int:
 
     for gl_code, r_json, r_csv in written_reports:
         print(f"[Google Flights] Daily report ({gl_code}) written: {r_json.name}, {r_csv.name}")
+
+    total_scanned = len(pairs) * len(gl_list)
+    total_observed = sum(1 for obs in all_observations if obs.get("status") == "observed")
+    total_deferred = sum(1 for obs in all_observations if obs.get("status") == "deferred")
+    total_failed = len(all_observations) - total_observed - total_deferred
+    total_elapsed = round(time.monotonic() - start_time, 2)
+    print(
+        f"\n[Google Flights] Run summary: elapsed={total_elapsed}s; "
+        f"coverage: observed={total_observed}/{total_scanned}, deferred={total_deferred}, failed={total_failed}"
+    )
+
+    if run_interrupted or total_observed < total_scanned:
+        return 2 if consecutive_blocks >= 2 else 1
     return 0
 
 
@@ -324,6 +452,18 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--min-stay-nights", type=int, default=cfg.trip.min_stay_nights, help="Minimum stay duration in nights")
     res.add_argument("--delay-seconds", type=int, default=cfg.google_flights.delay_seconds, help="Delay between pages in seconds")
     res.add_argument("--timeout-seconds", type=int, default=cfg.google_flights.timeout_seconds)
+    res.add_argument(
+        "--runtime-budget-seconds",
+        type=int,
+        default=cfg.execution.runtime_budget_seconds,
+        help="Maximum per-scraper runtime budget in seconds (default 1800)",
+    )
+    res.add_argument(
+        "--attended",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Wait for human intervention on anti-bot challenges",
+    )
     res.add_argument(
         "--skip-existing",
         action=argparse.BooleanOptionalAction,

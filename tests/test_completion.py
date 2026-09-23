@@ -163,6 +163,32 @@ class CompletionReducerTests(unittest.TestCase):
         ]
         self.assertEqual(self.reducer.history, expected)
 
+    def test_late_cheaper_fare_rejected_in_all_non_complete_states(self) -> None:
+        """Only SearchState.COMPLETE can accept and publish a fare.
+
+        All non-complete states (unverified, timeout, blocked, error, in-progress)
+        must reject fares to prevent publishing premature or ghost low prices.
+        """
+        for state in SearchState:
+            if state == SearchState.COMPLETE:
+                self.assertTrue(state.can_accept_fare)
+            else:
+                self.assertFalse(
+                    state.can_accept_fare,
+                    f"State {state} unexpectedly permits accepting fares"
+                )
+
+    def test_late_response_during_search_is_safely_ignored(self) -> None:
+        self.reducer.transition(_event("navigation_started"))
+        self.reducer.transition(_event("query_validated"))
+        self.assertEqual(self.reducer.state, SearchState.SEARCHING)
+
+        # Late response arriving during search must not advance state
+        self.reducer.transition(_event("late_response"))
+        self.assertEqual(self.reducer.state, SearchState.SEARCHING)
+        self.assertFalse(self.reducer.state.can_accept_fare)
+
 
 if __name__ == "__main__":
     unittest.main()
+

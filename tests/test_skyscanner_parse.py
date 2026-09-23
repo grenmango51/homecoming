@@ -11,6 +11,7 @@ from src.skyscanner_parse import (
     make_observation,
     money_values,
     page_status,
+    select_authoritative_fare,
     to_yymmdd,
 )
 
@@ -97,6 +98,57 @@ class ItineraryTests(unittest.TestCase):
         self.assertEqual(len(extract_from_xhr_payloads([payload])), 1)
 
 
+class AuthoritativeFareTests(unittest.TestCase):
+    def test_final_payload_replaces_intermediate_lower_price(self) -> None:
+        """A retracted or unverified intermediate low price is not kept if the final payload reports a higher fare."""
+        final_payload = {
+            "itineraries": {
+                "results": [
+                    {
+                        "price": {"raw": 782.0},
+                        "legs": [],
+                        "pricingOptions": [{"agentName": "AgentA", "price": {"raw": 782.0}}],
+                    }
+                ]
+            }
+        }
+        intermediate = [{"price_eur": 450.0}]
+        fare = select_authoritative_fare(
+            final_payload=final_payload,
+            intermediate_payloads=intermediate,
+            dom_cards=["€450 deal disappeared"],
+            tab_price=450.0,
+        )
+        self.assertEqual(fare, 782.0)
+
+    def test_fallback_to_tab_price_when_no_final_payload(self) -> None:
+        fare = select_authoritative_fare(
+            final_payload=None,
+            intermediate_payloads=None,
+            dom_cards=["1 stop €850"],
+            tab_price=795.0,
+        )
+        self.assertEqual(fare, 795.0)
+
+    def test_fallback_to_dom_cards_when_no_tab_price(self) -> None:
+        fare = select_authoritative_fare(
+            final_payload=None,
+            intermediate_payloads=None,
+            dom_cards=["1 stop €850", "direct €920"],
+            tab_price=None,
+        )
+        self.assertEqual(fare, 850.0)
+
+    def test_returns_none_when_no_valid_fares(self) -> None:
+        fare = select_authoritative_fare(
+            final_payload=None,
+            intermediate_payloads=None,
+            dom_cards=["no flights found"],
+            tab_price=None,
+        )
+        self.assertIsNone(fare)
+
+
 class ObservationTests(unittest.TestCase):
     def test_lowest_price_spans_tab_xhr_and_dom_sources(self) -> None:
         obs = make_observation(
@@ -126,6 +178,40 @@ class ObservationTests(unittest.TestCase):
         )
         self.assertEqual(obs["lowest_observed_price_eur"], 45.0)
         self.assertEqual(obs["status"], "observed")
+
+    def test_authoritative_fare_eur_takes_precedence(self) -> None:
+        obs = make_observation(
+            origin="HEL",
+            destination="HAN",
+            departure=dt.date(2026, 12, 9),
+            return_date=dt.date(2027, 1, 9),
+            page_url="https://www.skyscanner.net/transport/flights/hel/han/261209/270109/",
+            page_text="Cheapest from €795",
+            xhr_candidates=[{"price_eur": 850.0}],
+            dom_candidates=["€850"],
+            authoritative_fare_eur=782.0,
+            completion_evidence="xhr_complete+dom_settled",
+        )
+        self.assertEqual(obs["lowest_observed_price_eur"], 782.0)
+        self.assertEqual(obs["completion_evidence"], "xhr_complete+dom_settled")
+
+    def test_timeout_and_unverified_fail_closed_with_null_fare(self) -> None:
+        for non_observed in ("timeout", "user_action_required", "incomplete"):
+            obs = make_observation(
+                origin="HEL",
+                destination="HAN",
+                departure=dt.date(2026, 12, 9),
+                return_date=dt.date(2027, 1, 9),
+                page_url="https://www.skyscanner.net/transport/flights/hel/han/261209/270109/",
+                page_text="Cheapest from €795",
+                xhr_candidates=[{"price_eur": 782.0}],
+                dom_candidates=["1 stop 17 hr €820"],
+                status=non_observed,
+                completion_evidence="partial",
+            )
+            self.assertEqual(obs["status"], non_observed)
+            self.assertIsNone(obs["lowest_observed_price_eur"])
+            self.assertIsNone(obs["completion_evidence"])
 
 
 if __name__ == "__main__":

@@ -109,6 +109,10 @@ class CardTests(unittest.TestCase):
     def test_route_endpoints_are_not_reported_as_layovers(self) -> None:
         card = parse_eur_card_details("Nonstop 13 hr HEL HAN Finnair €782")
         self.assertEqual(card["layovers"], [])
+        card_cdg = parse_eur_card_details("Nonstop 11 hr CDG–HAN Air France €1,050")
+        self.assertEqual(card_cdg["layovers"], [])
+        card_cdg_stop = parse_eur_card_details("1 stop 15 hr CDG–HAN DOH Qatar Airways €890")
+        self.assertEqual(card_cdg_stop["layovers"], ["DOH"])
 
     def test_eur_and_multi_currency_parsers_differ_on_the_fare_floor(self) -> None:
         text = "1 stop 5 hr £23 cheap hop"

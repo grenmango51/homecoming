@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import AppConfig, TripConfig, load_config, resolve_trip_file
+from src.config import AppConfig, TripConfig, load_config, resolve_trip_file, validate_config
 
 
 def write_toml(content: str) -> Path:
@@ -202,5 +202,39 @@ class SearchPairTests(unittest.TestCase):
         self.assertEqual(TripConfig(trip_type="one-way", depart_from=None).get_search_pairs(), [])
 
 
+class ValidateConfigTests(unittest.TestCase):
+    def test_default_config_is_valid(self) -> None:
+        cfg = load_config()
+        self.assertEqual(validate_config(cfg), [])
+
+    def test_runtime_budget_below_minimum(self) -> None:
+        cfg = load_config()
+        cfg.execution.runtime_budget_seconds = 30
+        issues = validate_config(cfg)
+        self.assertTrue(any("runtime_budget_seconds" in i for i in issues))
+
+    def test_timeouts_below_minimum(self) -> None:
+        cfg = load_config()
+        cfg.skyscanner.timeout_seconds = 5
+        cfg.google_flights.timeout_seconds = 5
+        issues = validate_config(cfg)
+        self.assertTrue(any("skyscanner.timeout_seconds" in i for i in issues))
+        self.assertTrue(any("google_flights.timeout_seconds" in i for i in issues))
+
+    def test_delay_below_minimum(self) -> None:
+        cfg = load_config()
+        cfg.skyscanner.delay_seconds = 1
+        issues = validate_config(cfg)
+        self.assertTrue(any("skyscanner.delay_seconds" in i for i in issues))
+
+    def test_unattended_with_challenge_timeout_warning(self) -> None:
+        cfg = load_config()
+        cfg.skyscanner.attended = False
+        cfg.skyscanner.challenge_timeout_seconds = 60
+        issues = validate_config(cfg)
+        self.assertTrue(any("challenge_timeout_seconds > 0 but attended=false" in i for i in issues))
+
+
 if __name__ == "__main__":
     unittest.main()
+
