@@ -10,6 +10,7 @@ import datetime as dt
 import math
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -251,3 +252,36 @@ def deferred_observation(
         "candidate_cards": [],
         "notes": [reason],
     }
+
+
+# Chromium cache folders that hold no session, cookie, or consent state.
+# Never add "Default/Network" (cookies), "Local Storage", "IndexedDB",
+# "Session Storage", "Service Worker", "Preferences", or "Local State" here.
+PRUNABLE_PROFILE_SUBDIRS = (
+    "Default/Cache",
+    "Default/Code Cache",
+    "Default/GPUCache",
+    "GrShaderCache",
+    "ShaderCache",
+)
+
+
+def prunable_cache_dirs(profile_dir: Path) -> list[Path]:
+    """Cache folders inside a Chromium profile that hold no session or consent state."""
+    return [profile_dir / sub for sub in PRUNABLE_PROFILE_SUBDIRS if (profile_dir / sub).is_dir()]
+
+
+def prune_profile_cache(profile_dir: Path) -> float:
+    """Delete disposable cache folders inside a Chromium profile; return freed MB.
+
+    Only folders from :data:`PRUNABLE_PROFILE_SUBDIRS` are removed. Cookies,
+    local storage, and other bot-check or consent state are preserved.
+    """
+    freed = 0
+    for cache_dir in prunable_cache_dirs(profile_dir):
+        try:
+            freed += sum(f.stat().st_size for f in cache_dir.rglob("*") if f.is_file())
+        except OSError:
+            pass
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    return freed / (1024 * 1024)

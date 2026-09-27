@@ -1,10 +1,13 @@
 """Date generation and shared price/duration parsing."""
 
 import datetime as dt
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.common import (
     COMPLETION_VERSION,
+    PRUNABLE_PROFILE_SUBDIRS,
     build_search_pairs,
     circuit_breaker_tripped,
     date_range,
@@ -13,7 +16,10 @@ from src.common import (
     is_valid_completion_cache,
     is_valid_eur_fare,
     parse_numeric_price,
+    prunable_cache_dirs,
+    prune_profile_cache,
 )
+from src.config import load_config
 
 
 class DateRangeTests(unittest.TestCase):
@@ -242,6 +248,75 @@ class StrictCacheTests(unittest.TestCase):
                 extra_match={"gl": "SE"},
             )
         )
+
+
+class ProfileCachePruningTests(unittest.TestCase):
+    def _make_profile(self, root: Path) -> Path:
+        profile = root / "profile"
+        for sub in (*PRUNABLE_PROFILE_SUBDIRS, "Default/Network", "Default/Local Storage"):
+            folder = profile / sub
+            folder.mkdir(parents=True)
+            (folder / "data.bin").write_bytes(b"x" * 1024)
+        return profile
+
+    def test_returns_only_listed_subfolders_that_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = self._make_profile(Path(tmp))
+            (profile / "Default" / "Cache").mkdir(exist_ok=True)
+            found = prunable_cache_dirs(profile)
+            self.assertEqual(len(found), len(PRUNABLE_PROFILE_SUBDIRS))
+            for path in found:
+                rel = path.relative_to(profile).as_posix()
+                self.assertIn(rel, PRUNABLE_PROFILE_SUBDIRS)
+
+    def test_missing_subfolders_are_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "profile"
+            (profile / "Default" / "Cache").mkdir(parents=True)
+            self.assertEqual(prunable_cache_dirs(profile), [profile / "Default" / "Cache"])
+
+    def test_session_state_folders_are_never_returned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = self._make_profile(Path(tmp))
+            found = prunable_cache_dirs(profile)
+            self.assertNotIn(profile / "Default" / "Network", found)
+            self.assertNotIn(profile / "Default" / "Local Storage", found)
+
+    def test_prune_deletes_cache_but_keeps_session_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = self._make_profile(Path(tmp))
+            freed_mb = prune_profile_cache(profile)
+            self.assertGreater(freed_mb, 0)
+            for sub in PRUNABLE_PROFILE_SUBDIRS:
+                self.assertFalse((profile / sub).exists(), f"{sub} should be deleted")
+            self.assertTrue((profile / "Default" / "Network" / "data.bin").is_file())
+            self.assertTrue((profile / "Default" / "Local Storage" / "data.bin").is_file())
+
+
+class PruneCacheConfigTests(unittest.TestCase):
+    def _write_config(self, content: str) -> Path:
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False, encoding="utf-8") as handle:
+            handle.write(content)
+            return Path(handle.name)
+
+    def test_prune_cache_defaults_to_true(self) -> None:
+        cfg = load_config(self._write_config("[trip]\norigin = \"HEL\"\n"))
+        self.assertTrue(cfg.google_flights.prune_cache)
+        self.assertTrue(cfg.skyscanner.prune_cache)
+
+    def test_prune_cache_can_be_disabled(self) -> None:
+        cfg = load_config(
+            self._write_config("[google_flights]\nprune_cache = false\n\n[skyscanner]\nprune_cache = false\n")
+        )
+        self.assertFalse(cfg.google_flights.prune_cache)
+        self.assertFalse(cfg.skyscanner.prune_cache)
+
+    def test_prune_cache_can_be_enabled_explicitly(self) -> None:
+        cfg = load_config(
+            self._write_config("[google_flights]\nprune_cache = true\n\n[skyscanner]\nprune_cache = true\n")
+        )
+        self.assertTrue(cfg.google_flights.prune_cache)
+        self.assertTrue(cfg.skyscanner.prune_cache)
 
 
 if __name__ == "__main__":

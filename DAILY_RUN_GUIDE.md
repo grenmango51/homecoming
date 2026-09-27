@@ -14,8 +14,9 @@ setup, configuration and the point-of-sale study tools.
   the same time, scans identical date pairs, and prints a side-by-side
   comparison table.
 - **Visible browser required.** Both sites suppress results for headless
-  automation, so the scrapers open a real window using their own persistent
-  profile directories (`.browser-profile-daily`, `.skyscanner-profile`). Your
+  automation, so the scrapers open a real window. Google Flights uses a
+  temporary profile that is deleted on close; Skyscanner keeps a persistent
+  profile (`.skyscanner-profile-stealth`) for its bot-check clearance. Your
   everyday browser profile is never touched.
 - **Resuming.** With `skip_existing = true`, a scan interrupted midway picks up
   where it left off: today's already-observed pairs are read from disk and only

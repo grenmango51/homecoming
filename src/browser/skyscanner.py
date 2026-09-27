@@ -16,6 +16,7 @@ try:
 except ImportError:
     from playwright.async_api import BrowserContext, Page, Playwright
 
+from src.browser.session import DISK_CACHE_LIMIT_ARG
 from src.skyscanner_parse import is_challenge_page, money_values
 
 SKYSCANNER_COOKIES = [
@@ -44,6 +45,7 @@ async def launch_skyscanner_context(
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-infobars",
+            DISK_CACHE_LIMIT_ARG,
         ],
     )
     try:

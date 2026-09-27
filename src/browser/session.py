@@ -21,6 +21,10 @@ GOOGLE_CONSENT_COOKIES = [
 
 CONSENT_BUTTON_NAMES = ("Reject all", "Accept all")
 
+# Cap Chromium's disk cache at 50 MB so profiles stop growing without limit.
+# The cache holds no login, consent, or bot-check state.
+DISK_CACHE_LIMIT_ARG = "--disk-cache-size=52428800"
+
 
 async def launch_google_context(
     playwright: Playwright,
@@ -42,6 +46,7 @@ async def launch_google_context(
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-infobars",
+            DISK_CACHE_LIMIT_ARG,
         ],
     )
     try:

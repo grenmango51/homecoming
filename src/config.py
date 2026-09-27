@@ -16,6 +16,7 @@ from src.common import build_search_pairs
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
+PROFILES_DIR = Path("var") / "profiles"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.toml"
 DEFAULT_TRIP_FILE = "HEL_HAN.toml"
 
@@ -81,8 +82,9 @@ class ScraperConfig:
     enabled: bool = True
     delay_seconds: int = 3
     timeout_seconds: int = 30
-    profile_dir: str = ".browser-profile"
+    profile_dir: str = "var/profiles/google"
     results_dir: str = "flight_results"
+    prune_cache: bool = True
 
     def resolved_profile_dir(self, root: Path = PROJECT_ROOT) -> Path:
         return (root / self.profile_dir).resolve()
@@ -94,6 +96,7 @@ class ScraperConfig:
 @dataclass
 class GoogleFlightsConfig(ScraperConfig):
     gl: str | list[str] = field(default_factory=lambda: ["FI", "SE"])
+    profile_mode: str = "persistent"  # "persistent" or "ephemeral"
 
     @property
     def gl_list(self) -> list[str]:
@@ -123,7 +126,7 @@ class SkyscannerConfig(ScraperConfig):
     poll_wait_seconds: int = 30
     challenge_timeout_seconds: int = 0  # Default 0 for unattended; set >0 for attended mode
     attended: bool = False
-    profile_dir: str = ".skyscanner-profile"
+    profile_dir: str = ".skyscanner-profile-stealth"
     results_dir: str = "flight_results_skyscanner"
 
 
@@ -259,8 +262,10 @@ def load_config(
             ),
             delay_seconds=int(gf_data.get("delay_seconds", 3)),
             timeout_seconds=int(gf_data.get("timeout_seconds", 30)),
-            profile_dir=str(gf_data.get("profile_dir", ".browser-profile")),
+            profile_dir=str(gf_data.get("profile_dir", "var/profiles/google")),
             results_dir=str(gf_data.get("results_dir", "flight_results")),
+            prune_cache=bool(gf_data.get("prune_cache", True)),
+            profile_mode=str(gf_data.get("profile_mode", "persistent")),
         ),
         skyscanner=SkyscannerConfig(
             enabled=bool(ss_data.get("enabled", True)),
@@ -269,8 +274,9 @@ def load_config(
             poll_wait_seconds=int(ss_data.get("poll_wait_seconds", 30)),
             challenge_timeout_seconds=int(ss_data.get("challenge_timeout_seconds", 0)),
             attended=bool(ss_data.get("attended", False)),
-            profile_dir=str(ss_data.get("profile_dir", ".skyscanner-profile")),
+            profile_dir=str(ss_data.get("profile_dir", ".skyscanner-profile-stealth")),
             results_dir=str(ss_data.get("results_dir", "flight_results_skyscanner")),
+            prune_cache=bool(ss_data.get("prune_cache", True)),
         ),
         comparison=ComparisonConfig(output_dir=str(comp_data.get("output_dir", "flight_results"))),
         trip_file=trip_filename,
@@ -290,4 +296,8 @@ def validate_config(cfg: AppConfig) -> list[str]:
         issues.append(f"skyscanner.delay_seconds={cfg.skyscanner.delay_seconds} is below 2s minimum rate limit.")
     if cfg.skyscanner.challenge_timeout_seconds > 0 and not cfg.skyscanner.attended:
         issues.append("challenge_timeout_seconds > 0 but attended=false; challenges will be waited on but nobody may be watching.")
+    if cfg.google_flights.profile_mode not in ("persistent", "ephemeral"):
+        issues.append(
+            f"google_flights.profile_mode={cfg.google_flights.profile_mode!r} must be 'persistent' or 'ephemeral'."
+        )
     return issues

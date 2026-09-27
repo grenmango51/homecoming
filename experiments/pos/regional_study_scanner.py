@@ -35,7 +35,7 @@ from src.google_parse import (
 )
 
 ROOT = PROJECT_ROOT
-DEFAULT_PROFILE_DIR = ROOT / ".browser-profile"
+DEFAULT_PROFILE_DIR = ROOT / "var" / "profiles" / "google-study"
 STUDY_RESULTS_DIR = ROOT / "flight_results_study"
 SOURCE = "Google Flights Regional Scanner"
 

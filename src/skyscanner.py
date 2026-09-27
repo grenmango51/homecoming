@@ -32,8 +32,8 @@ except ImportError:
 
 from src import reporting
 from src.browser.skyscanner import (
-    SKYSCANNER_COOKIES,
     extract_dom_candidate_cards,
+    launch_skyscanner_context,
     try_solve_press_and_hold,
     wait_for_challenge_resolution,
 )
@@ -46,6 +46,7 @@ from src.common import (
     configure_stdio,
     deferred_observation,
     is_valid_completion_cache,
+    prune_profile_cache,
     resolve_browser_executable,
 )
 from src.config import PROJECT_ROOT, load_config
@@ -547,20 +548,9 @@ async def run(args: argparse.Namespace) -> int:
     observations: list[dict[str, Any]] = []
 
     async with async_playwright() as playwright:
-        context: BrowserContext = await playwright.chromium.launch_persistent_context(
-            str(profile_dir),
-            headless=False,
-            executable_path=browser_executable,
-            locale="en-GB",
-            viewport={"width": 1440, "height": 1000},
-            ignore_default_args=["--enable-automation"],
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-infobars",
-            ],
+        context: BrowserContext = await launch_skyscanner_context(
+            playwright, profile_dir, executable_path=browser_executable
         )
-        await context.add_cookies(SKYSCANNER_COOKIES)
         page = context.pages[0] if context.pages else await context.new_page()
 
         start_time = time.monotonic()
@@ -765,6 +755,11 @@ async def run(args: argparse.Namespace) -> int:
 
         finally:
             await context.close()
+
+    if cfg.skyscanner.prune_cache:
+        freed_mb = prune_profile_cache(profile_dir)
+        if freed_mb > 0:
+            print(f"[Skyscanner] Pruned {freed_mb:.1f} MB of browser cache from the profile.")
 
     print(f"\n[Skyscanner] Daily Skyscanner report written: {report_json.name}, {report_csv.name}")
     total_scanned = len(pairs)

@@ -153,7 +153,7 @@ async def scan_route(
 
     route_tag = f"{origin}_{dest}"
     results_dir = ROOT / f"flight_results_{route_tag}"
-    profile_dir = ROOT / f".browser-profile-{route_tag}"
+    profile_dir = ROOT / "var" / "profiles" / f"google-{route_tag}"
     results_dir.mkdir(parents=True, exist_ok=True)
     profile_dir.mkdir(parents=True, exist_ok=True)
 

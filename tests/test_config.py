@@ -5,7 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import AppConfig, TripConfig, load_config, resolve_trip_file, validate_config
+from src.config import (
+    PROJECT_ROOT,
+    AppConfig,
+    TripConfig,
+    load_config,
+    resolve_trip_file,
+    validate_config,
+)
 
 
 def write_toml(content: str) -> Path:
@@ -29,6 +36,19 @@ class DefaultConfigTests(unittest.TestCase):
         cfg = load_config()
         self.assertNotEqual(cfg.google_flights.resolved_profile_dir(), cfg.skyscanner.resolved_profile_dir())
         self.assertNotEqual(cfg.google_flights.resolved_results_dir(), cfg.skyscanner.resolved_results_dir())
+
+    def test_shipped_config_google_profile_lives_under_var_profiles(self) -> None:
+        cfg = load_config()
+        profiles_root = (PROJECT_ROOT / "var" / "profiles").resolve()
+        self.assertEqual(cfg.google_flights.resolved_profile_dir().parent, profiles_root)
+        # Skyscanner stays at the project root: moving it under var/profiles/
+        # coincided with more anti-bot challenges and was rolled back.
+        self.assertEqual(cfg.skyscanner.resolved_profile_dir(), (PROJECT_ROOT / ".skyscanner-profile-stealth").resolve())
+
+    def test_builtin_default_profile_dirs(self) -> None:
+        cfg = load_config(Path("/nonexistent/config.toml"), trip_path="HEL_HAN.toml")
+        self.assertEqual(cfg.google_flights.profile_dir, "var/profiles/google")
+        self.assertEqual(cfg.skyscanner.profile_dir, ".skyscanner-profile-stealth")
 
     def test_point_of_sale_is_normalised(self) -> None:
         cfg = load_config(write_toml('[google_flights]\ngl = " se "\n'))
@@ -164,6 +184,20 @@ poll_wait_seconds = 45
         finally:
             path.unlink()
 
+    def test_profile_mode_defaults_to_persistent(self) -> None:
+        path = write_toml('[google_flights]\ngl = "FI"\n')
+        try:
+            self.assertEqual(load_config(path).google_flights.profile_mode, "persistent")
+        finally:
+            path.unlink()
+
+    def test_profile_mode_ephemeral_is_parsed(self) -> None:
+        path = write_toml('[google_flights]\nprofile_mode = "ephemeral"\n')
+        try:
+            self.assertEqual(load_config(path).google_flights.profile_mode, "ephemeral")
+        finally:
+            path.unlink()
+
 
 
 class SearchPairTests(unittest.TestCase):
@@ -233,6 +267,19 @@ class ValidateConfigTests(unittest.TestCase):
         cfg.skyscanner.challenge_timeout_seconds = 60
         issues = validate_config(cfg)
         self.assertTrue(any("challenge_timeout_seconds > 0 but attended=false" in i for i in issues))
+
+    def test_invalid_profile_mode_is_flagged(self) -> None:
+        cfg = load_config()
+        cfg.google_flights.profile_mode = "bogus"
+        issues = validate_config(cfg)
+        self.assertTrue(any("profile_mode" in i for i in issues))
+
+    def test_valid_profile_modes_pass_validation(self) -> None:
+        for mode in ("persistent", "ephemeral"):
+            with self.subTest(mode=mode):
+                cfg = load_config()
+                cfg.google_flights.profile_mode = mode
+                self.assertFalse(any("profile_mode" in i for i in validate_config(cfg)))
 
 
 if __name__ == "__main__":

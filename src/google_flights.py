@@ -39,6 +39,7 @@ from src.common import (
     configure_stdio,
     deferred_observation,
     is_valid_completion_cache,
+    prune_profile_cache,
     resolve_browser_executable,
 )
 from src.config import PROJECT_ROOT, load_config
@@ -235,10 +236,12 @@ async def run(args: argparse.Namespace) -> int:
     else:
         gl_list = cfg.google_flights.gl_list
 
+    profile_mode = cfg.google_flights.profile_mode
     profile_dir = Path(os.environ.get("GOOGLE_FLIGHTS_PROFILE_DIR", args.profile_dir)).resolve()
     base_results_dir = Path(args.results_dir).resolve()
     browser_executable = resolve_browser_executable(args.browser_executable)
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    if profile_mode == "persistent":
+        profile_dir.mkdir(parents=True, exist_ok=True)
     base_results_dir.mkdir(parents=True, exist_ok=True)
 
     print(
@@ -249,6 +252,10 @@ async def run(args: argparse.Namespace) -> int:
         print("[Google Flights] Using Patchright stealth Chromium engine.")
     else:
         print("[Google Flights] Using Playwright Chromium engine (Patchright not available).")
+    if profile_mode == "ephemeral":
+        print("[Google Flights] Profile mode: ephemeral (temporary profile, deleted when the browser closes).")
+    else:
+        print(f"[Google Flights] Profile mode: persistent ({profile_dir})")
     print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
     if browser_executable:
         print(f"[Google Flights] Using installed browser: {browser_executable}")
@@ -264,7 +271,10 @@ async def run(args: argparse.Namespace) -> int:
 
     async with async_playwright() as playwright:
         context = await browser.launch_google_context(
-            playwright, profile_dir, headless=False, executable_path=browser_executable
+            playwright,
+            "" if profile_mode == "ephemeral" else profile_dir,
+            headless=False,
+            executable_path=browser_executable,
         )
         page = context.pages[0] if context.pages else await context.new_page()
         try:
@@ -417,6 +427,11 @@ async def run(args: argparse.Namespace) -> int:
 
     for gl_code, r_json, r_csv in written_reports:
         print(f"[Google Flights] Daily report ({gl_code}) written: {r_json.name}, {r_csv.name}")
+
+    if cfg.google_flights.prune_cache and profile_mode == "persistent":
+        freed_mb = prune_profile_cache(profile_dir)
+        if freed_mb > 0:
+            print(f"[Google Flights] Pruned {freed_mb:.1f} MB of browser cache from the profile.")
 
     total_scanned = len(pairs) * len(gl_list)
     total_observed = sum(1 for obs in all_observations if obs.get("status") == "observed")

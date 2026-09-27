@@ -107,7 +107,7 @@ To track a new route:
 ## What to Expect While Running
 
 1. **Visible Browser Window**: The search runs in a visible browser window to ensure airlines and booking providers return accurate live pricing without blocking.
-2. **Persistent Profiles & First-Run Consent**: Persistent browser profiles (`.browser-profile` and `.skyscanner-profile`) maintain cookies, storage, and consent choices across runs. No automatic cookie wiping is performed. If cookie consent or a verification prompt appears on a first run, resolve it once interactively; preferences persist for future automated runs.
+2. **Profiles & First-Run Consent**: Google Flights runs with a temporary browser profile (`profile_mode = "ephemeral"`, the default) that is deleted when the browser closes; consent cookies are re-seeded on every launch, so no state is needed. Skyscanner keeps a persistent profile (`.skyscanner-profile-stealth`) to preserve its bot-check clearance cookies across runs. No automatic cookie wiping is performed. If cookie consent or a verification prompt appears on a first run, resolve it once interactively; preferences persist for future automated runs. After each run, disposable Chromium cache folders are pruned (disable with `prune_cache = false`), and the disk cache is capped at 50 MB, so profiles stay small.
 3. **Resuming Searches**: Re-running automatically skips date pairs already completed today using strict cache verification (`COMPLETION_VERSION = 3`). Incomplete, timed-out, or deferred entries are cleanly re-queried.
 
 ---

@@ -37,7 +37,7 @@ from src.google_parse import (
 from src.regions import load_all_regions
 
 ROOT = PROJECT_ROOT
-DEFAULT_PROFILE_DIR = ROOT / ".browser-profile"
+DEFAULT_PROFILE_DIR = ROOT / "var" / "profiles" / "google-study"
 ALL_POS_RESULTS_DIR = ROOT / "flight_results_all_pos"
 ACTIVE_MARKETS_FILE = ALL_POS_RESULTS_DIR / "active_market_gl_codes.json"
 SUMMARY_STEM = "all_pos_summary_report"

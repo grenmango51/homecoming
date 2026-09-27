@@ -39,11 +39,21 @@ delay_seconds = 3
 # Page load timeout in seconds
 timeout_seconds = 30
 
-# Dedicated browser profile directory (relative to project root)
-profile_dir = ".browser-profile-daily"
+# Dedicated browser profile directory (relative to project root).
+# Lives under var/profiles/ so the project root stays clean.
+profile_dir = "var/profiles/google"
 
 # Results output directory (relative to project root)
 results_dir = "flight_results"
+
+# Delete Chromium cache folders after each run (cookies and consent state are kept)
+prune_cache = true
+
+# Profile mode: "ephemeral" (default) uses a temporary profile deleted when
+# the browser closes — consent cookies are re-seeded on every launch, so no
+# state is needed and no profile folder is kept. "persistent" keeps a saved
+# profile under profile_dir.
+profile_mode = "ephemeral"
 
 [skyscanner]
 # Whether to run Skyscanner in the unified execution
@@ -64,11 +74,17 @@ attended = false
 # Wait time in seconds if manual challenge / CAPTCHA solving is required (used when attended = true)
 challenge_timeout_seconds = 0
 
-# Dedicated browser profile directory (relative to project root)
+# Dedicated browser profile directory (relative to project root).
+# Persistent: holds the bot-check clearance cookies between runs.
+# Kept at the project root: moving it under var/profiles/ on 2026-09-27
+# coincided with a large increase in anti-bot challenges, so it was rolled back.
 profile_dir = ".skyscanner-profile-stealth"
 
 # Results output directory (relative to project root)
 results_dir = "flight_results_skyscanner"
+
+# Delete Chromium cache folders after each run (cookies and bot-check clearance are kept)
+prune_cache = true
 
 [comparison]
 # Directory where the cross-platform comparison reports will be saved
