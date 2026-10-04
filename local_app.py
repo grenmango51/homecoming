@@ -18,6 +18,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from src.local_search import job_config, validate_search
 from src.web_export import export_fares
@@ -224,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.jobs.lock:
                 latest = next(reversed(self.server.jobs.jobs), None)
                 job = self.server.jobs.snapshot(latest) if latest else None
-            self.reply(200, {"token": self.server.token, "job": job})
+            self.reply(200, {"app": "flight-finder-local", "token": self.server.token, "job": job})
         elif path.startswith("/api/jobs/"):
             try:
                 self.reply(200, self.server.jobs.snapshot(path.removeprefix("/api/jobs/")))
@@ -275,7 +276,21 @@ def main() -> None:
     parser.add_argument("--open", action="store_true", help="Open the local search page in your browser")
     args = parser.parse_args()
     jobs = SearchJobs()
-    server = LocalServer(args.port, jobs)
+    try:
+        server = LocalServer(args.port, jobs)
+    except OSError:
+        if args.open:
+            url = f"http://127.0.0.1:{args.port}"
+            try:
+                with urlopen(f"{url}/api/session", timeout=2) as response:
+                    existing = json.load(response)
+                if existing.get("app") == "flight-finder-local":
+                    webbrowser.open(url)
+                    print(f"Flight Finder is already running: {url}")
+                    return
+            except (OSError, ValueError):
+                pass
+        raise SystemExit(f"Port {args.port} is occupied. Close the other app or choose --port 4174.") from None
     url = f"http://127.0.0.1:{server.server_address[1]}"
     print(f"Flight Finder: {url}\nKeep this terminal open. Ctrl+C stops the app and its search.", flush=True)
     if args.open:
