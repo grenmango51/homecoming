@@ -138,7 +138,10 @@ class SearchJobs:
                                        "expected": len(allowed), "statuses": counts}
             return {key: value for key, value in job.items() if key != "directory"} | {
                 "fares": fares, "providers": providers, "mode": "live",
-                "elapsed_seconds": round(time.time() - dt.datetime.fromisoformat(job["started_at"]).timestamp()),
+                "elapsed_seconds": round(
+                    (dt.datetime.fromisoformat(job["finished_at"]).timestamp() if job.get("finished_at") else time.time())
+                    - dt.datetime.fromisoformat(job["started_at"]).timestamp()
+                ),
             }
 
     def cancel(self, job_id: str) -> dict:
@@ -147,6 +150,7 @@ class SearchJobs:
             if job["status"] not in TERMINAL_STATES:
                 job["status"] = "cancelled"
                 job["message"] = "Search stopped. Completed prices are kept locally."
+                job["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
                 if self.process:
                     stop_process(self.process)
                     self.process.wait(timeout=15)
