@@ -3,12 +3,13 @@
 import datetime as dt
 import http.client
 import json
+import os
 import tempfile
 import threading
 import tomllib
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from local_app import LocalServer, SearchJobs
 from src.local_search import job_config, validate_search
@@ -49,6 +50,16 @@ class SearchContractTests(unittest.TestCase):
         self.assertTrue(cfg["skyscanner"]["headless"])
         self.assertFalse(cfg["skyscanner"]["attended"])
         self.assertEqual(cfg["skyscanner"]["challenge_timeout_seconds"], 0)
+
+    def test_local_runner_preserves_automatic_challenge_handling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = SearchJobs(Path(tmp))
+            with patch.dict(os.environ, {}, clear=True), \
+                    patch("local_app.subprocess.Popen", return_value=Mock()) as launch, \
+                    patch("local_app.threading.Thread"):
+                jobs.start(QUERY | {"flex_days": 0})
+                options = launch.call_args.kwargs
+                self.assertNotEqual(options.get("env", os.environ).get("FLIGHT_FINDER_HUMAN_CHECKS_ONLY"), "1")
 
     def test_oneway_exports_do_not_invent_return_date(self):
         row = {"origin": "HEL", "destination": "HAN", "departure_date": "2026-12-09",

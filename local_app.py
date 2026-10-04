@@ -76,8 +76,7 @@ class SearchJobs:
                     self.process = subprocess.Popen(
                         [sys.executable, "-u", str(ROOT / "run_all.py"), "--config", str(config),
                          "--trip", str(config), "--no-skip-existing"],
-                        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                        env=os.environ | {"FLIGHT_FINDER_HUMAN_CHECKS_ONLY": "1"}, **options,
+                        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options,
                     )
                 finally:
                     log.close()

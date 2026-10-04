@@ -32,7 +32,7 @@ Choose airports and dates, then press **Search flights**. Both Google Flights an
 - One way: exact departure or up to seven departure dates.
 - Scope: one adult, economy, EUR, Finland market. No booking or payment actions.
 - Flexible searches can take several minutes, up to a 30-minute scanner budget. Use **Stop search** to terminate the search and its browser processes.
-- Providers can block background searches or require human verification. These appear as statuses in the app, without automatically opening a browser. Use a provider link if you want to check those dates manually. Blocked or incomplete searches never become invented prices.
+- Skyscanner uses the existing automatic Press & Hold challenge handler and session recovery in the background. If recovery fails, the blocked search appears in the app's status without opening a browser. Use a provider link if you want to check those dates manually. Blocked or incomplete searches never become invented prices.
 - Prices are observations, not booking guarantees. The provider links confirm your selected dates.
 
 Google prices are accepted only after every visible loading indicator (including the plane progress bar and “Searching nearby airports”) clears and the fare cards stay unchanged for three seconds. This is checked again after scrolling, and the prices are parsed from the exact snapshot that passed the check. A timeout remains an unverified search, even if a price is already visible. Older Google checkpoints without this check are rescanned rather than reused.
