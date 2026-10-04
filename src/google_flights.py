@@ -78,7 +78,7 @@ async def scan_pair(
     origin: str,
     destination: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     timeout_ms: int,
     gl: str = "FI",
 ) -> dict[str, Any]:
@@ -153,7 +153,7 @@ async def scan_pair(
 
 
 def failed_observation(
-    *, origin: str, destination: str, departure: dt.date, return_date: dt.date, error: Exception
+    *, origin: str, destination: str, departure: dt.date, return_date: dt.date | None, error: Exception
 ) -> dict[str, Any]:
     """Persist a recoverable error instead of losing an entire daily matrix."""
     return reporting.error_observation(
@@ -182,8 +182,10 @@ def write_daily_report(results_dir: Path, observations: list[dict[str, Any]]) ->
     )
 
 
-def resolve_pairs(args: argparse.Namespace, cfg: Any) -> list[tuple[dt.date, dt.date]]:
+def resolve_pairs(args: argparse.Namespace, cfg: Any) -> list[tuple[dt.date, dt.date | None]]:
     """Pick date pairs from explicit CLI ranges, else from the trip config."""
+    if cfg.trip.trip_type in {"one-way", "oneway"}:
+        return cfg.trip.get_search_pairs()
     if args.depart_from and args.depart_to:
         return build_search_pairs(
             depart_from=args.depart_from,
@@ -192,7 +194,7 @@ def resolve_pairs(args: argparse.Namespace, cfg: Any) -> list[tuple[dt.date, dt.
             return_to=args.return_to,
             min_stay_nights=args.min_stay_nights,
         )
-    return [pair for pair in cfg.trip.get_search_pairs() if pair[1] is not None]
+    return cfg.trip.get_search_pairs()
 
 
 def cached_observation(
@@ -202,7 +204,7 @@ def cached_observation(
     origin: str,
     dest: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     gl: str,
 ) -> dict[str, Any] | None:
     """Return today's saved observation for this pair when it is verified complete and valid."""

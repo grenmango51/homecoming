@@ -68,7 +68,7 @@ NEEDS_HUMAN = {"blocked", "user_action_required"}
 
 
 def failed_observation(
-    *, origin: str, destination: str, departure: dt.date, return_date: dt.date, error: Exception
+    *, origin: str, destination: str, departure: dt.date, return_date: dt.date | None, error: Exception
 ) -> dict[str, Any]:
     """Record a failure observation so the matrix run continues gracefully."""
     return reporting.error_observation(
@@ -127,6 +127,16 @@ async def _handle_challenge(
     4. Attended human solver (if enabled)
     """
     if not is_challenge_page(page.url, page_text):
+        return page_text
+
+    if os.environ.get("FLIGHT_FINDER_HUMAN_CHECKS_ONLY") == "1":
+        print("[Skyscanner] Human verification required. Complete it in the visible browser.", flush=True)
+        if attended and challenge_timeout_seconds > 0:
+            await wait_for_challenge_resolution(page, timeout_seconds=challenge_timeout_seconds)
+            try:
+                return await page.locator("body").inner_text()
+            except Exception:
+                pass
         return page_text
 
     print("[Skyscanner] Anti-bot challenge detected. Attempting automated resolution...", flush=True)
@@ -193,7 +203,7 @@ async def scan_pair(
     origin: str,
     destination: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     timeout_ms: int,
     poll_wait_seconds: int = 30,
     challenge_timeout_seconds: int = 0,
@@ -514,7 +524,9 @@ async def scan_pair(
 
 async def run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config, args.trip)
-    if args.depart_from and args.depart_to:
+    if cfg.trip.trip_type in {"one-way", "oneway"}:
+        pairs = cfg.trip.get_search_pairs()
+    elif args.depart_from and args.depart_to:
         pairs = build_search_pairs(
             depart_from=args.depart_from,
             depart_to=args.depart_to,
@@ -523,7 +535,7 @@ async def run(args: argparse.Namespace) -> int:
             min_stay_nights=args.min_stay_nights,
         )
     else:
-        pairs = [p for p in cfg.trip.get_search_pairs() if p[1] is not None]
+        pairs = cfg.trip.get_search_pairs()
 
     if not pairs:
         raise ValueError("No date pairs meet the minimum-stay requirement.")
@@ -561,7 +573,7 @@ async def run(args: argparse.Namespace) -> int:
 
         try:
             for index, (departure, return_date) in enumerate(pairs, start=1):
-                pair_file = results_dir / f"{departure}_{return_date}.json"
+                pair_file = results_dir / reporting.pair_filename(departure, return_date)
 
                 # Check runtime budget
                 if time.monotonic() >= deadline:
@@ -715,10 +727,10 @@ async def run(args: argparse.Namespace) -> int:
                             break
                         dep_str = old_obs.get("departure_date")
                         ret_str = old_obs.get("return_date")
-                        if not dep_str or not ret_str:
+                        if not dep_str:
                             continue
                         dep_date = dt.date.fromisoformat(dep_str)
-                        ret_date = dt.date.fromisoformat(ret_str)
+                        ret_date = dt.date.fromisoformat(ret_str) if ret_str else None
                         print(f"[Skyscanner] [Sweep] Retrying {dep_date} -> {ret_date}...")
                         try:
                             rem_time = max(5.0, deadline - time.monotonic())

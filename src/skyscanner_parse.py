@@ -44,18 +44,18 @@ def flight_search_url(
     origin: str,
     destination: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     *,
     base_url: str = SKYSCANNER_BASE,
 ) -> str:
-    """Build canonical Skyscanner round-trip flight search URL."""
+    """Build canonical Skyscanner round-trip or one-way flight search URL."""
     dep_str = to_yymmdd(departure)
-    ret_str = to_yymmdd(return_date)
+    ret_part = f"/{to_yymmdd(return_date)}" if return_date else ""
     orig = origin.strip().lower()
     dest = destination.strip().lower()
     return (
-        f"{base_url}/transport/flights/{orig}/{dest}/{dep_str}/{ret_str}/"
-        f"?adultsv2=1&cabinclass=economy&childrenv2=&ref=home&rtn=1"
+        f"{base_url}/transport/flights/{orig}/{dest}/{dep_str}{ret_part}/"
+        f"?adultsv2=1&cabinclass=economy&childrenv2=&ref=home&rtn={1 if return_date else 0}"
         f"&preferdirects=false&outboundaltsenabled=false&inboundaltsenabled=false"
         f"&sortby=cheapest&currency=EUR"
     )
@@ -241,7 +241,7 @@ def make_observation(
     origin: str,
     destination: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     page_url: str,
     page_text: str,
     xhr_candidates: list[dict[str, Any]],
@@ -283,8 +283,8 @@ def make_observation(
         "origin": origin,
         "destination": destination,
         "departure_date": departure.isoformat(),
-        "return_date": return_date.isoformat(),
-        "stay_nights": (return_date - departure).days,
+        "return_date": return_date.isoformat() if return_date else None,
+        "stay_nights": (return_date - departure).days if return_date else None,
         "status": status,
         "lowest_observed_price_eur": lowest_price,
         "completion_version": COMPLETION_VERSION,

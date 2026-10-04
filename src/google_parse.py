@@ -80,10 +80,12 @@ def _is_template_route(origin: str, dest: str) -> bool:
 
 
 def flight_search_url(
-    origin: str, destination: str, departure: dt.date, return_date: dt.date, gl: str = "FI"
+    origin: str, destination: str, departure: dt.date, return_date: dt.date | None, gl: str = "FI"
 ) -> str:
     """Daily-scan URL: protobuf template for HEL->HAN, free-text query otherwise."""
     orig, dest = origin.strip().upper(), destination.strip().upper()
+    if return_date is None:
+        return build_route_url(orig, dest, departure, None, gl=gl)
     if _is_template_route(orig, dest):
         return build_structured_flight_url(departure, return_date, gl=gl)
     return (
@@ -318,7 +320,7 @@ def make_observation(
     origin: str,
     destination: str,
     departure: dt.date,
-    return_date: dt.date,
+    return_date: dt.date | None,
     page_text: str,
     candidates: list[dict[str, Any]] | list[str],
     status: str | None = None,
@@ -390,8 +392,8 @@ def make_observation(
         "origin": origin,
         "destination": destination,
         "departure_date": departure.isoformat(),
-        "return_date": return_date.isoformat(),
-        "stay_nights": (return_date - departure).days,
+        "return_date": return_date.isoformat() if return_date else None,
+        "stay_nights": (return_date - departure).days if return_date else None,
         "status": status,
         "lowest_observed_price_eur": lowest_price,
         "completion_version": COMPLETION_VERSION,

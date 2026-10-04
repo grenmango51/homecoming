@@ -21,7 +21,21 @@ pip install -r requirements.txt
 python -m patchright install chromium
 ```
 
-### 2. Run the Search
+### 2. Open the local search UI
+
+On Windows, double-click `setup-local.cmd` once, then double-click `start-local.cmd` whenever you want to search. After the installation above, you can also run:
+
+```powershell
+python local_app.py --open
+```
+
+Open **http://127.0.0.1:4173**. Choose airports and travel dates, then press **Search flights**. Both providers fetch new prices locally; the flexible-date grid fills as they finish. Supports round trips and one-way departures, exact dates or ±1/±3 days. Searches use one adult, economy, EUR and the Finland market. Provider blocks or incomplete searches are shown honestly.
+
+Keep the app terminal open. Nobody on the internet can run searches on your computer through this app: it binds to loopback only and protects requests from other websites. Each GitHub user runs their own copy. Profiles, credentials and results stay outside Git.
+
+See [the local UI guide](docs/WEB_UI.md) for details and macOS/Linux setup.
+
+### 3. Run a configured scan from the terminal
 
 To run both Google Flights and Skyscanner and generate a side-by-side price comparison table:
 

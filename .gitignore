@@ -12,3 +12,7 @@ __pycache__/
 _sync_backup/
 var/
 live-captions/
+.vercel/
+.env
+.env.*
+web/data/fares.json

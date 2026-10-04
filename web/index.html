@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Search current flight prices locally with Google Flights and Skyscanner.">
+  <meta name="theme-color" content="#071d49">
+  <title>Flight Finder — Local flight search</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#search-card">Skip to flight search</a>
+
+  <header class="site-header">
+    <div class="shell nav-shell">
+      <a class="brand" href="#top" aria-label="Flight Finder home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M5 9.5h20.5M8.5 15.5h15M12 21.5h9" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/><path d="M6 24.5 26 7" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg></span>
+        <span>Flight<span>Finder</span></span>
+      </a>
+      <div class="nav-meta"><span class="archive-dot" aria-hidden="true"></span>Local flight search</div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="shell search-wrap" aria-label="Flight search">
+      <form id="search-card" class="search-card" novalidate>
+        <div class="search-card-top">
+          <div class="trip-tabs" role="radiogroup" aria-label="Trip type">
+            <label class="trip-option">
+              <input type="radio" name="tripType" value="roundtrip" checked>
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span>Round trip</span>
+            </label>
+            <label class="trip-option">
+              <input type="radio" name="tripType" value="oneway">
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span>One way</span>
+            </label>
+          </div>
+          <p class="archive-label"><span aria-hidden="true">◌</span> Fetches fresh prices on your computer</p>
+        </div>
+
+        <div class="form-grid airport-grid">
+          <div class="input-wrap airport-wrap" id="origin-wrap">
+            <label for="origin-input">From</label>
+            <div class="input-surface">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 21s7-5.14 7-12a7 7 0 1 0-14 0c0 6.86 7 12 7 12Z"/><circle cx="12" cy="9" r="2.5"/></svg>
+              <input id="origin-input" name="origin" type="text" inputmode="text" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="origin-suggestions" aria-expanded="false" aria-describedby="airport-help" value="Helsinki (HEL)">
+            </div>
+            <div class="suggestions" id="origin-suggestions" role="listbox" aria-label="Origin airport suggestions" hidden></div>
+          </div>
+
+          <button class="swap-button" id="swap-button" type="button" aria-label="Swap origin and destination" title="Swap route">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 7h11M15 3l4 4-4 4M17 17H6M9 13l-4 4 4 4"/></svg>
+          </button>
+
+          <div class="input-wrap airport-wrap" id="destination-wrap">
+            <label for="destination-input">To</label>
+            <div class="input-surface">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 21s7-5.14 7-12a7 7 0 1 0-14 0c0 6.86 7 12 7 12Z"/><circle cx="12" cy="9" r="2.5"/></svg>
+              <input id="destination-input" name="destination" type="text" inputmode="text" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="destination-suggestions" aria-expanded="false" aria-describedby="airport-help" value="Hanoi (HAN)">
+            </div>
+            <div class="suggestions" id="destination-suggestions" role="listbox" aria-label="Destination airport suggestions" hidden></div>
+          </div>
+        </div>
+        <p class="sr-only" id="airport-help">Choose a suggestion or enter any valid three-letter IATA airport code.</p>
+
+        <div class="form-grid details-grid">
+          <div class="date-field-group">
+            <button class="date-field" id="departure-button" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <span class="field-label">Departure</span>
+              <strong id="departure-value">Wed, 9 Dec 2026</strong>
+              <span class="field-subtle" id="departure-subtle">Choose a date</span>
+            </button>
+          </div>
+          <div class="date-field-group return-field-group">
+            <button class="date-field" id="return-button" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <span class="field-label">Return</span>
+              <strong id="return-value">Sat, 9 Jan 2027</strong>
+              <span class="field-subtle" id="return-subtle">Choose a date</span>
+            </button>
+          </div>
+          <button class="passenger-field" id="passenger-button" type="button" aria-describedby="passenger-note">
+            <span class="field-label">Travellers &amp; cabin</span>
+            <strong>1 adult · Economy</strong>
+            <span class="field-subtle">1 adult · EUR</span>
+          </button>
+        </div>
+        <p class="sr-only" id="passenger-note">Searches use one adult in Economy and the Finland market.</p>
+
+        <div class="search-options">
+          <label class="check-control">
+            <input id="flexible-toggle" type="checkbox" checked>
+            <span class="check-mark" aria-hidden="true"></span>
+            <span>Flexible dates</span>
+          </label>
+          <label class="inline-select-label" for="flex-days">Search nearby</label>
+          <select id="flex-days" aria-label="Flexible date range">
+            <option value="1">± 1 day</option>
+            <option value="3" selected>± 3 days</option>
+          </select>
+          <span class="option-divider" aria-hidden="true"></span>
+          <label class="inline-select-label" for="min-stay">Minimum stay</label>
+          <select id="min-stay" aria-label="Minimum stay">
+            <option value="7">7 nights</option>
+            <option value="14">14 nights</option>
+            <option value="21" selected>21 nights</option>
+            <option value="28">28 nights</option>
+          </select>
+        </div>
+
+        <div class="search-card-bottom">
+          <p class="form-disclaimer">Fetch fresh prices from both providers. Flexible dates check up to 49 combinations; keep the app open.</p>
+          <div class="search-actions">
+            <button class="text-button" id="stop-search" type="button" hidden>Stop search</button>
+            <button class="search-button" id="search-button" type="submit">
+              <span>Search flights</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <p id="form-message" class="form-message" role="alert" aria-live="assertive"></p>
+      </form>
+    </section>
+
+    <section class="shell archive-status-wrap" aria-label="Search status">
+      <div class="archive-status" id="archive-status" role="status" aria-live="polite">
+        <span class="status-pulse" aria-hidden="true"></span>
+        <span id="archive-status-text">Connecting to local app…</span>
+      </div>
+    </section>
+
+    <section id="results" class="shell results" aria-labelledby="results-title" hidden>
+      <div class="results-heading">
+        <div>
+          <p class="eyebrow">Flight search results</p>
+          <h2 id="results-title">HEL <span aria-hidden="true">→</span> HAN</h2>
+          <p id="result-description">Prices fetched for the selected travel window.</p>
+        </div>
+        <div class="results-type" id="results-type">Round trip · 1 adult · Economy</div>
+      </div>
+
+      <div id="result-summary" class="result-summary" aria-live="polite"></div>
+
+      <div class="source-actions" aria-label="Source searches">
+        <div>
+          <p class="source-kicker">Continue with the source</p>
+          <p>Open this exact route and date pair with a provider. Source availability is determined on the provider’s site.</p>
+        </div>
+        <div class="source-link-row">
+          <a id="google-link" class="source-link" href="https://www.google.com/travel/flights" target="_blank" rel="noopener noreferrer">Google Flights <span aria-hidden="true">↗</span></a>
+          <a id="skyscanner-link" class="source-link" href="https://www.skyscanner.net" target="_blank" rel="noopener noreferrer">Skyscanner <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+
+      <section class="matrix-section" aria-labelledby="matrix-title">
+        <div class="matrix-heading">
+          <div>
+            <h3 id="matrix-title">Flexible date matrix</h3>
+            <p>Departures as rows, returns as columns. Prices appear as each search finishes. Empty cells have no verified price.</p>
+          </div>
+          <div class="matrix-legend" aria-label="Fare matrix legend">
+            <span><i class="legend-selected"></i> Selected</span>
+            <span><i class="legend-best"></i> Lowest fetched</span>
+          </div>
+        </div>
+        <div class="matrix-scroll" tabindex="0" aria-label="Flight fare comparison matrix, scroll horizontally on small screens">
+          <table class="fare-matrix" id="fare-matrix"></table>
+        </div>
+      </section>
+
+      <section class="archive-principles" aria-label="Search principles">
+        <div><span class="principle-icon" aria-hidden="true">01</span><p><strong>Fetched from providers.</strong> Only complete, verified prices from this search are shown.</p></div>
+        <div><span class="principle-icon" aria-hidden="true">02</span><p><strong>Clear search status.</strong> Blocked or incomplete searches never become a made-up price.</p></div>
+        <div><span class="principle-icon" aria-hidden="true">03</span><p><strong>Follow the source.</strong> Provider links always use your selected codes and dates.</p></div>
+      </section>
+    </section>
+  </main>
+
+  <div id="date-picker" class="date-picker" role="dialog" aria-modal="true" aria-labelledby="date-picker-title" hidden>
+    <div class="picker-panel">
+      <div class="picker-head">
+        <div>
+          <p class="picker-kicker" id="picker-target-label">Choose departure</p>
+          <h2 id="date-picker-title">Select travel dates</h2>
+        </div>
+        <button type="button" class="icon-button" data-picker-action="close" aria-label="Close date picker">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="picker-nav">
+        <button type="button" class="month-nav" data-picker-action="previous" aria-label="Previous month"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></svg></button>
+        <p id="picker-range-label">Select a departure, then a return</p>
+        <button type="button" class="month-nav" data-picker-action="next" aria-label="Next month"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></svg></button>
+      </div>
+      <p id="picker-error" class="picker-error" role="alert" aria-live="assertive"></p>
+      <div id="calendar-months" class="calendar-months"></div>
+      <div class="picker-footer">
+        <button type="button" class="text-button" data-picker-action="clear">Clear dates</button>
+        <p>Monday-start calendar · minimum stay applies to round trips</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <p><strong>Flight Finder</strong> · Local flight search</p>
+      <p>Independent interface. Not affiliated with any airline or provider.</p>
+    </div>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
