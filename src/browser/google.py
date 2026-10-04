@@ -6,6 +6,7 @@ cheapest-tab switching, sort order enforcement, and card extraction.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -15,40 +16,73 @@ except ImportError:
     from playwright.async_api import Page
 
 from src.browser.session import page_text
+from src.completion import GoogleCompletionGate
 from src.google_parse import is_blocked, parse_card_details
 
 DEFAULT_CARD_SELECTOR = "ul.Rk10dc > li, li.pIav2d"
 LISTITEM_CARD_SELECTOR = "ul.Rk10dc > li, li[role='listitem'], [role='listitem'], li.pIav2d"
 
-_RESULTS_READY_JS = """() => {
+_RESULT_STATE_JS = """() => {
     const text = document.body?.innerText || '';
-    if (/unusual traffic|captcha|verify you are human/i.test(text)) {
+    const visible = element => {
+        const rect = element.getBoundingClientRect();
+        if (!element.getClientRects().length || rect.width <= 0 || rect.height <= 0) return false;
+        for (let node = element; node instanceof Element; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+        }
+        // Google uses aria-hidden=true on visibly animated decorative indicators.
         return true;
-    }
-    const pb = document.querySelector("[role='progressbar'], .m6QErb.D5KUk");
-    const isPbVisible = pb && pb.getAttribute('aria-hidden') !== 'true' && window.getComputedStyle(pb).opacity !== '0' && window.getComputedStyle(pb).display !== 'none';
-    if (isPbVisible) {
-        return false;
-    }
-    const hasSkeletons = document.querySelectorAll("[class*='placeholder'], [class*='shimmer'], [class*='skeleton']").length > 0;
-    if (hasSkeletons) {
-        return false;
-    }
-    const hasResults = /\\b\\d+\\s+results returned\\b|departing flights|cheapest|no flights/i.test(text);
-    const hasCards = document.querySelectorAll("ul.Rk10dc > li, li.pIav2d, [role='listitem']").length > 0;
-    return hasResults && hasCards;
+    };
+    const shown = selector => [...document.querySelectorAll(selector)].filter(visible);
+    const progress = shown("[role='progressbar'], [aria-busy='true'], .m6QErb.D5KUk");
+    const skeletons = shown("[class*='placeholder'], [class*='shimmer'], [class*='skeleton']");
+    const loadingMessages = shown(".HoPSkc, .OeyRC, [role='status']")
+        .filter(e => /searching|fetching results|loading (?:flights|results)/i.test(e.innerText || ''));
+    const cards = shown("ul.Rk10dc > li, li.pIav2d, [role='listitem']");
+    const tabs = shown("[role='tab'], [aria-label*='Cheapest']")
+        .filter(e => /cheapest/i.test(e.innerText || e.getAttribute('aria-label') || ''));
+    return {
+        text,
+        blocked: /unusual traffic|captcha|verify you are human/i.test(text),
+        retryable_error: /oops, something went wrong|no results returned/i.test(text),
+        loading: progress.length > 0 || skeletons.length > 0 || loadingMessages.length > 0,
+        has_results: /\\b\\d+\\s+results returned\\b|departing flights|cheapest|no flights/i.test(text),
+        has_cards: cards.length > 0,
+        card_texts: cards.map(e => e.innerText || ''),
+        tab_texts: tabs.map(e => e.innerText || ''),
+        signature: JSON.stringify([tabs.map(e => e.innerText || ''), cards.map(e => e.innerText || '')]),
+        visible_progressbars: progress.length,
+        loading_messages: loadingMessages.length,
+        visible_skeletons: skeletons.length,
+    };
 }"""
+
+_RESULTS_READY_JS = "() => { const s = (" + _RESULT_STATE_JS + ")(); return s.blocked || (!s.loading && s.has_results && s.has_cards); }"
+
+
+async def google_result_snapshot(page: Page) -> dict:
+    """Read the loading indicators and result signature together."""
+    return await page.evaluate(_RESULT_STATE_JS)
 
 
 async def wait_for_results(page: Page, timeout_ms: int, settle_ms: int = 3_000) -> str:
-    """Wait for rendered results to appear and settle."""
-    try:
-        await page.wait_for_function(_RESULTS_READY_JS, timeout=timeout_ms)
-    except Exception as err:
-        raise TimeoutError(f"Google Flights results did not render within {timeout_ms}ms") from err
-    if settle_ms > 0:
-        await page.wait_for_timeout(settle_ms)
-    return await page_text(page)
+    snapshot = await wait_for_result_snapshot(page, timeout_ms, settle_ms)
+    return snapshot["text"]
+
+
+async def wait_for_result_snapshot(page: Page, timeout_ms: int, settle_ms: int = 3_000) -> dict:
+    """Wait for every loading indicator to clear and prices/cards to stay stable."""
+    gate = GoogleCompletionGate(settle_seconds=max(0, settle_ms) / 1000)
+    deadline = time.monotonic() + timeout_ms / 1000
+    loading_seen = False
+    while time.monotonic() < deadline:
+        snapshot = await google_result_snapshot(page)
+        loading_seen = loading_seen or snapshot["loading"]
+        if gate.ready(snapshot, time.monotonic()):
+            return snapshot | {"loading_seen": loading_seen, "stable_ms": settle_ms}
+        await page.wait_for_timeout(min(250, max(1, int((deadline - time.monotonic()) * 1000))))
+    raise TimeoutError(f"Google Flights results did not finish loading and stabilize within {timeout_ms}ms")
 
 
 async def click_reload_if_present(page: Page, settle_ms: int = 3_000) -> bool:
@@ -149,6 +183,7 @@ async def extract_cards(
     limit: int = 30,
     scroll_steps: int = 1,
     parser: Callable[[str, str], dict[str, Any]] = parse_card_details,
+    texts: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Parse the visible flight cards, de-duplicated and priced."""
     for _ in range(scroll_steps):
@@ -160,7 +195,7 @@ async def extract_cards(
 
     cards: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for text in await _card_texts(page, selector):
+    for text in texts if texts is not None else await _card_texts(page, selector):
         compact = " ".join(text.split())
         if len(compact) < min_length:
             continue

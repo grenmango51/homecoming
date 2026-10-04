@@ -29,7 +29,7 @@ On Windows, double-click `setup-local.cmd` once, then double-click `start-local.
 python local_app.py --open
 ```
 
-Open **http://127.0.0.1:4173**. Choose airports and travel dates, then press **Search flights**. Both providers fetch new prices locally; the flexible-date grid fills as they finish. Supports round trips and one-way departures, exact dates or ±1/±3 days. Searches use one adult, economy, EUR and the Finland market. Provider blocks or incomplete searches are shown honestly.
+Open **http://127.0.0.1:4173**. Choose airports and travel dates, then press **Search flights**. Both providers fetch new prices locally in the background, without opening browser windows or taskbar entries; the flexible-date grid fills as they finish. Supports round trips and one-way departures, exact dates or ±1/±3 days. Searches use one adult, economy, EUR and the Finland market. Provider blocks or incomplete searches are shown in the app without opening a popup.
 
 Keep the app terminal open. Nobody on the internet can run searches on your computer through this app: it binds to loopback only and protects requests from other websites. Each GitHub user runs their own copy. Profiles, credentials and results stay outside Git.
 

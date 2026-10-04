@@ -26,14 +26,16 @@ Linux systems may also need Chromium system dependencies: `python -m patchright 
 
 ## Search
 
-Choose airports and dates, then press **Search flights**. Both Google Flights and Skyscanner run in parallel in visible browser windows. Every click starts a new, isolated search with reuse of saved fares disabled. Results appear progressively and carry observation timestamps.
+Choose airports and dates, then press **Search flights**. Both Google Flights and Skyscanner run in parallel in the background, without opening browser windows or taskbar entries. Every click starts a new, isolated search with reuse of saved fares disabled. Results appear progressively and carry observation timestamps.
 
 - Round trip: exact dates, a 3-by-3 grid (±1 day), or a 7-by-7 grid (±3 days), filtered by minimum stay.
 - One way: exact departure or up to seven departure dates.
 - Scope: one adult, economy, EUR, Finland market. No booking or payment actions.
 - Flexible searches can take several minutes, up to a 30-minute scanner budget. Use **Stop search** to terminate the search and its browser processes.
-- If Skyscanner asks for a human check, complete it yourself in its visible browser within the wait window. Providers can still block automation or return incomplete results; these appear as statuses, never invented prices. Google may also require consent or human interaction.
+- Providers can block background searches or require human verification. These appear as statuses in the app, without automatically opening a browser. Use a provider link if you want to check those dates manually. Blocked or incomplete searches never become invented prices.
 - Prices are observations, not booking guarantees. The provider links confirm your selected dates.
+
+Google prices are accepted only after every visible loading indicator (including the plane progress bar and “Searching nearby airports”) clears and the fare cards stay unchanged for three seconds. This is checked again after scrolling, and the prices are parsed from the exact snapshot that passed the check. A timeout remains an unverified search, even if a price is already visible. Older Google checkpoints without this check are rescanned rather than reused.
 
 Only one search runs at a time. Keep the app terminal open. Closing the terminal with Ctrl+C stops active searches. Reloading the page reconnects to the current search; the files remain saved locally after completion. Restarting the app resets the in-memory job list.
 

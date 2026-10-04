@@ -9,6 +9,38 @@ from .models import SearchQuery, SearchState
 
 
 @dataclass
+class GoogleCompletionGate:
+    """Prices and cards must stay unchanged while all loading signals are clear."""
+
+    settle_seconds: float = 3.0
+    signature: str | None = None
+    stable_since: float | None = None
+
+    def ready(self, snapshot: dict, now: float) -> bool:
+        if snapshot.get("blocked"):
+            return True
+        # Return the error page to the caller so Google's Reload can recover it.
+        # This is a wait outcome, not permission to accept a fare.
+        if snapshot.get("retryable_error") and not snapshot.get("loading"):
+            self.signature = None
+            self.stable_since = None
+            return True
+        if snapshot.get("loading") or not snapshot.get("has_results") or not snapshot.get("has_cards"):
+            self.signature = None
+            self.stable_since = None
+            return False
+        signature = snapshot.get("signature")
+        if not signature:
+            self.signature = None
+            self.stable_since = None
+            return False
+        if signature != self.signature:
+            self.signature = signature
+            self.stable_since = now
+        return self.stable_since is not None and now - self.stable_since >= self.settle_seconds
+
+
+@dataclass
 class SearchEvent:
     event_type: str
     attempt_id: str

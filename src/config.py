@@ -80,6 +80,7 @@ class ScraperConfig:
     """Settings common to both scrapers."""
 
     enabled: bool = True
+    headless: bool = False
     delay_seconds: int = 3
     timeout_seconds: int = 30
     profile_dir: str = "var/profiles/google"
@@ -255,6 +256,7 @@ def load_config(
         ),
         google_flights=GoogleFlightsConfig(
             enabled=bool(gf_data.get("enabled", True)),
+            headless=bool(gf_data.get("headless", False)),
             gl=(
                 [str(x).strip().upper() for x in gf_data["gl"] if str(x).strip()]
                 if isinstance(gf_data.get("gl"), list)
@@ -269,6 +271,7 @@ def load_config(
         ),
         skyscanner=SkyscannerConfig(
             enabled=bool(ss_data.get("enabled", True)),
+            headless=bool(ss_data.get("headless", False)),
             delay_seconds=int(ss_data.get("delay_seconds", 4)),
             timeout_seconds=int(ss_data.get("timeout_seconds", 45)),
             poll_wait_seconds=int(ss_data.get("poll_wait_seconds", 30)),

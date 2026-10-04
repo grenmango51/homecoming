@@ -3,8 +3,51 @@
 import datetime
 import unittest
 
-from src.completion import CompletionReducer, SearchEvent
+from src.completion import CompletionReducer, GoogleCompletionGate, SearchEvent
 from src.models import SearchQuery, SearchState
+
+
+class GoogleLoadingTests(unittest.TestCase):
+    def setUp(self):
+        self.gate = GoogleCompletionGate()
+        self.results = {'has_results': True, 'has_cards': True, 'loading': False,
+                        'signature': 'Cheapest €631; card €956', 'blocked': False}
+
+    def test_priced_cards_with_loading_bar_are_never_ready(self):
+        for now in (0, 3, 10, 30):
+            self.assertFalse(self.gate.ready(self.results | {'loading': True}, now))
+
+    def test_loader_reappearing_resets_the_quiet_interval(self):
+        self.assertFalse(self.gate.ready(self.results, 0))
+        self.assertFalse(self.gate.ready(self.results, 2))
+        self.assertFalse(self.gate.ready(self.results | {'loading': True}, 2.5))
+        self.assertFalse(self.gate.ready(self.results, 3))
+        self.assertFalse(self.gate.ready(self.results, 5.9))
+        self.assertTrue(self.gate.ready(self.results, 6))
+
+    def test_new_cheaper_price_requires_another_quiet_interval(self):
+        self.assertFalse(self.gate.ready(self.results, 0))
+        cheaper = self.results | {'signature': 'Cheapest €610; card €610'}
+        self.assertFalse(self.gate.ready(cheaper, 2.9))
+        self.assertFalse(self.gate.ready(cheaper, 3))
+        self.assertTrue(self.gate.ready(cheaper, 6))
+
+    def test_disappearing_cards_prevents_completion(self):
+        self.assertFalse(self.gate.ready(self.results, 0))
+        self.assertFalse(self.gate.ready(self.results | {'has_cards': False}, 4))
+        self.assertFalse(self.gate.ready(self.results, 5))
+        self.assertTrue(self.gate.ready(self.results, 8))
+
+    def test_finished_error_page_returns_for_reload_without_cards(self):
+        error = {'retryable_error': True, 'has_cards': False, 'loading': False}
+        self.assertTrue(self.gate.ready(error, 0))
+        self.assertFalse(self.gate.ready(error | {'loading': True}, 3))
+
+    def test_results_after_reload_need_a_new_quiet_interval(self):
+        self.assertFalse(self.gate.ready(self.results, 0))
+        self.assertTrue(self.gate.ready({'retryable_error': True, 'loading': False}, 3))
+        self.assertFalse(self.gate.ready(self.results, 4))
+        self.assertTrue(self.gate.ready(self.results, 7))
 
 
 def _make_query() -> SearchQuery:
@@ -191,4 +234,3 @@ class CompletionReducerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

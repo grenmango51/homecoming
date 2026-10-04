@@ -70,13 +70,13 @@ def job_config(query: dict, job_dir: Path, profile_dir: Path, *, budget: int = 1
     sections = {
         "execution": {"strategy": "parallel", "skip_existing": False,
                       "auto_compare": query["trip_type"] == "roundtrip", "runtime_budget_seconds": budget},
-        "google_flights": {"enabled": True, "gl": ["FI"], "profile_mode": "ephemeral",
+        "google_flights": {"enabled": True, "headless": True, "gl": ["FI"], "profile_mode": "ephemeral",
                            "profile_dir": str(profile_dir / "google"), "results_dir": str(job_dir / "google"),
                            "delay_seconds": 3, "timeout_seconds": 30},
-        "skyscanner": {"enabled": True, "profile_dir": str(profile_dir / "skyscanner"),
+        "skyscanner": {"enabled": True, "headless": True, "profile_dir": str(profile_dir / "skyscanner"),
                        "results_dir": str(job_dir / "skyscanner"), "delay_seconds": 2,
                        "timeout_seconds": 45, "poll_wait_seconds": 30,
-                       "attended": True, "challenge_timeout_seconds": 90},
+                       "attended": False, "challenge_timeout_seconds": 0},
         "comparison": {"output_dir": str(job_dir / "comparison")},
     }
     lines = trip

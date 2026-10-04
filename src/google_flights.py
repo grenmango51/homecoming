@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Human-supervised Google Flights fare scanner.
 
-Reads the rendered Google Flights page in a visible, persistent browser. It
+Reads the rendered Google Flights page in a dedicated browser. It
 never follows a booking link or clicks a purchase/checkout control.
 
 Fare parsing lives in :mod:`src.google_parse` and page driving in
@@ -44,6 +44,7 @@ from src.common import (
 )
 from src.config import PROJECT_ROOT, load_config
 from src.google_parse import (
+    GOOGLE_COMPLETION_CHECK,
     flight_search_url,
     make_observation,
     page_status,
@@ -58,7 +59,9 @@ REPORT_STEM = "daily_fare_report"
 NEEDS_HUMAN = {"blocked", "user_action_required"}
 
 
-async def extract_candidate_cards(page: Page, curr: str = "EUR") -> list[dict[str, Any]]:
+async def extract_candidate_cards(
+    page: Page, curr: str = "EUR", *, scroll_steps: int = 3, texts: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Parse the visible flight cards with the euro-only price parser."""
     return await browser.extract_cards(
         page,
@@ -67,8 +70,9 @@ async def extract_candidate_cards(page: Page, curr: str = "EUR") -> list[dict[st
         min_length=20,
         key_length=80,
         limit=50,
-        scroll_steps=3,
+        scroll_steps=scroll_steps,
         parser=parse_eur_card_details,
+        texts=texts,
     )
 
 
@@ -101,7 +105,8 @@ async def scan_pair(
             pass
 
     try:
-        text = await browser.wait_for_results(page, timeout_ms)
+        initial_snapshot = await browser.wait_for_result_snapshot(page, timeout_ms)
+        text = initial_snapshot["text"]
     except TimeoutError:
         page_t = await browser.page_text(page)
         observation = make_observation(
@@ -124,16 +129,28 @@ async def scan_pair(
     if "something went wrong" in lowered or "no results returned" in lowered or page_status(text) == "incomplete":
         if await browser.click_reload_if_present(page):
             try:
-                text = await browser.wait_for_results(page, timeout_ms)
+                initial_snapshot = await browser.wait_for_result_snapshot(page, timeout_ms)
+                text = initial_snapshot["text"]
             except TimeoutError:
                 pass
 
     candidates = await extract_candidate_cards(page)
 
-    # Re-read the body once cards have rendered, and prepend the Cheapest tab
-    # header so its headline fare is visible to the banner parser.
-    text = await browser.page_text(page) or text
-    tab_text = await browser.read_cheapest_tab_text(page)
+    # Scrolling can cause additional rendering. Require a fresh quiet interval
+    # afterward, then read cards without triggering another scroll/load cycle.
+    final_status = None
+    try:
+        snapshot = await browser.wait_for_result_snapshot(page, timeout_ms)
+        candidates = await extract_candidate_cards(page, scroll_steps=0, texts=snapshot["card_texts"])
+    except TimeoutError:
+        final_status = "completion_unverified"
+        candidates = []
+        snapshot = await browser.google_result_snapshot(page)
+
+    # Parse the exact snapshot that passed the gate, including the tab headline.
+    # Separate DOM reads could otherwise capture a new, unfinished price update.
+    text = snapshot["text"] or text
+    tab_text = "\n".join(snapshot["tab_texts"])
     if tab_text:
         text = f"{tab_text}\n{text}"
 
@@ -144,8 +161,17 @@ async def scan_pair(
         return_date=return_date,
         page_text=text,
         candidates=candidates,
+        status=final_status,
     )
     observation["gl"] = gl
+    if observation["status"] == "observed":
+        observation["google_completion_check"] = GOOGLE_COMPLETION_CHECK
+        observation["loading_checks"] = {
+            "stable_ms": snapshot["stable_ms"],
+            "loading_seen": initial_snapshot["loading_seen"] or snapshot["loading_seen"],
+            "visible_progressbars": snapshot["visible_progressbars"],
+            "loading_messages": snapshot["loading_messages"], "visible_skeletons": snapshot["visible_skeletons"],
+        }
     if observation["status"] != "observed":
         observation["page_url"] = page.url
         observation["visible_page_text"] = text[:2000]
@@ -218,7 +244,7 @@ def cached_observation(
         dest=dest,
         departure_date=departure,
         return_date=return_date,
-        extra_match={"gl": gl},
+        extra_match={"gl": gl, "google_completion_check": GOOGLE_COMPLETION_CHECK},
     ):
         return cached
     return None
@@ -245,9 +271,11 @@ async def run(args: argparse.Namespace) -> int:
     if profile_mode == "persistent":
         profile_dir.mkdir(parents=True, exist_ok=True)
     base_results_dir.mkdir(parents=True, exist_ok=True)
+    headless = getattr(args, "headless", cfg.google_flights.headless)
 
     print(
-        f"[Google Flights] Scanning {len(pairs)} date pairs in a visible browser "
+        f"[Google Flights] Scanning {len(pairs)} date pairs "
+        f"({'background' if headless else 'visible'} browser) "
         f"(Point of Sale: {', '.join(gl_list)}). Results: {base_results_dir}"
     )
     if _USING_PATCHRIGHT:
@@ -258,7 +286,8 @@ async def run(args: argparse.Namespace) -> int:
         print("[Google Flights] Profile mode: ephemeral (temporary profile, deleted when the browser closes).")
     else:
         print(f"[Google Flights] Profile mode: persistent ({profile_dir})")
-    print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
+    if not headless:
+        print("[Google Flights] If Google shows consent, sign-in, or a challenge, handle it in the opened browser.")
     if browser_executable:
         print(f"[Google Flights] Using installed browser: {browser_executable}")
 
@@ -275,7 +304,7 @@ async def run(args: argparse.Namespace) -> int:
         context = await browser.launch_google_context(
             playwright,
             "" if profile_mode == "ephemeral" else profile_dir,
-            headless=False,
+            headless=headless,
             executable_path=browser_executable,
         )
         page = context.pages[0] if context.pages else await context.new_page()
@@ -499,6 +528,8 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--profile-dir", default=str(cfg.google_flights.resolved_profile_dir()))
     res.add_argument("--results-dir", default=str(cfg.google_flights.resolved_results_dir()))
     res.add_argument("--browser-executable", default=cfg.execution.browser_executable, help="Path to Chrome/Edge")
+    res.add_argument("--headless", action=argparse.BooleanOptionalAction,
+                     default=cfg.google_flights.headless, help="Run without a browser window")
     return res
 
 

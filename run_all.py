@@ -51,6 +51,7 @@ async def run_scraper(
     config_path: Path | None = None,
     trip_path: Path | str | None = None,
     skip_existing: bool | None = None,
+    headless: bool = False,
 ) -> int:
     """Launch a scraper module as an asynchronous subprocess with live output logging."""
     py_exec = str(VENV_PYTHON) if VENV_PYTHON.is_file() else sys.executable
@@ -63,11 +64,13 @@ async def run_scraper(
         cmd.append("--skip-existing" if skip_existing else "--no-skip-existing")
 
     print(f"[{name}] Starting process...")
+    process_options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" and headless else {}
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=str(ROOT),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        **process_options,
     )
 
     if proc.stdout:
@@ -119,7 +122,9 @@ async def orchestrate(
     ]
 
     def launch(name: str, module: str, log_path: Path):
-        return run_scraper(name, module, log_path, config_path, active_trip, cfg.execution.skip_existing)
+        settings = cfg.google_flights if module == "src.google_flights" else cfg.skyscanner
+        return run_scraper(name, module, log_path, config_path, active_trip,
+                           cfg.execution.skip_existing, headless=settings.headless)
 
     exit_codes: dict[str, int] = {}
     if cfg.execution.strategy == "parallel":

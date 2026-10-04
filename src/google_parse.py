@@ -15,6 +15,7 @@ from typing import Any
 from src.common import COMPLETION_VERSION, EUROS_RE, PRICE_RE, duration_minutes, is_valid_eur_fare
 
 GOOGLE_FLIGHTS = "https://www.google.com/travel/flights"
+GOOGLE_COMPLETION_CHECK = 1
 
 # Sort-by-price ("Cheapest") selector understood by the Google Flights front end.
 CHEAPEST_SORT_PARAM = "EgoIABAAGAAgAigB"
@@ -290,6 +291,8 @@ def page_status(text: str) -> str:
         return "blocked"
     if "sign in" in lowered and len(text) < 1000:
         return "user_action_required"
+    if re.search(r"searching (?:nearby airports|for flights)|fetching results", lowered):
+        return "completion_unverified"
     if "oops, something went wrong" in lowered:
         return "incomplete"
     if not re.search(r"\b\d+ results returned\b|departing flights|no flights|cheapest", lowered):

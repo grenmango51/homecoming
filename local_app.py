@@ -64,13 +64,15 @@ class SearchJobs:
             config.write_text(job_config(query, directory, self.directory / "profiles", budget=self.budget), encoding="utf-8")
             self.jobs[job_id] = {"id": job_id, "status": "running", "query": query,
                                  "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                                 "directory": directory, "message": "Opening both provider browsers…"}
+                                 "directory": directory, "message": "Fetching prices in the background…"}
             self.active = job_id
             # Spawn under the lock so Cancel cannot arrive before the process exists.
             try:
                 log = (directory / "search.log").open("w", encoding="utf-8")
                 try:
-                    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+                    options = {
+                        "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+                    } if os.name == "nt" else {"start_new_session": True}
                     self.process = subprocess.Popen(
                         [sys.executable, "-u", str(ROOT / "run_all.py"), "--config", str(config),
                          "--trip", str(config), "--no-skip-existing"],

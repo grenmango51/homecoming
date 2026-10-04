@@ -10,10 +10,12 @@ from src.browser.google import (
     LISTITEM_CARD_SELECTOR,
     click_reload_if_present,
     extract_cards,
+    google_result_snapshot,
     read_cheapest_tab_text,
     sort_by_price,
     switch_to_cheapest_tab,
     wait_for_hydration,
+    wait_for_result_snapshot,
     wait_for_results,
 )
 from src.browser.session import (
@@ -42,6 +44,7 @@ __all__ = [
     "dismiss_consent",
     "extract_cards",
     "extract_dom_candidate_cards",
+    "google_result_snapshot",
     "launch_google_context",
     "launch_skyscanner_context",
     "page_text",
@@ -51,5 +54,6 @@ __all__ = [
     "switch_to_cheapest_tab",
     "wait_for_challenge_resolution",
     "wait_for_hydration",
+    "wait_for_result_snapshot",
     "wait_for_results",
 ]

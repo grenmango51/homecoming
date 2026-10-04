@@ -45,12 +45,17 @@ class SearchContractTests(unittest.TestCase):
         self.assertEqual(cfg["trip"]["exact_pairs"], query["pairs"])
         self.assertEqual(cfg["google_flights"]["gl"], ["FI"])
         self.assertIn("private", cfg["skyscanner"]["results_dir"])
+        self.assertTrue(cfg["google_flights"]["headless"])
+        self.assertTrue(cfg["skyscanner"]["headless"])
+        self.assertFalse(cfg["skyscanner"]["attended"])
+        self.assertEqual(cfg["skyscanner"]["challenge_timeout_seconds"], 0)
 
     def test_oneway_exports_do_not_invent_return_date(self):
         row = {"origin": "HEL", "destination": "HAN", "departure_date": "2026-12-09",
                "return_date": None, "fetched_at": "2026-10-04T06:00:00+00:00",
                "status": "observed", "lowest_observed_price_eur": 420,
-               "completion_version": 3, "completion_evidence": "dom_settled", "gl": "FI"}
+               "completion_version": 3, "completion_evidence": "dom_settled", "gl": "FI",
+               "google_completion_check": 1}
         for provider in ("skyscanner", "google_flights"):
             fare = public_fare(row, provider)
             self.assertIsNone(fare["return_date"])
@@ -64,7 +69,8 @@ class SearchContractTests(unittest.TestCase):
             row = {"origin": "HEL", "destination": "HAN", "departure_date": "2026-12-09",
                    "return_date": "2027-01-09", "fetched_at": "2026-10-04T06:00:00+00:00",
                    "status": "observed", "lowest_observed_price_eur": 420,
-                   "completion_version": 3, "completion_evidence": "dom_settled", "gl": "FI"}
+                   "completion_version": 3, "completion_evidence": "dom_settled", "gl": "FI",
+                   "google_completion_check": 1}
             path = directory / "google/2026-12-09_2027-01-09.json"
             path.write_text(json.dumps(row))
             jobs = SearchJobs(directory)

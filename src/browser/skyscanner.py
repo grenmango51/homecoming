@@ -29,6 +29,7 @@ async def launch_skyscanner_context(
     playwright: Playwright,
     profile_dir: Path | str,
     *,
+    headless: bool = False,
     executable_path: str | None = None,
     locale: str = "en-GB",
     viewport: dict[str, int] | None = None,
@@ -36,7 +37,7 @@ async def launch_skyscanner_context(
     """Launch persistent browser context tuned for Skyscanner anti-bot resistance."""
     context = await playwright.chromium.launch_persistent_context(
         str(profile_dir),
-        headless=False,
+        headless=headless,
         executable_path=executable_path,
         locale=locale,
         viewport=viewport or {"width": 1440, "height": 1000},

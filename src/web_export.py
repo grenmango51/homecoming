@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from .common import is_valid_completion_cache
-from .google_parse import build_route_url
+from .google_parse import GOOGLE_COMPLETION_CHECK, build_route_url
 from .reporting import utc_now, write_json
 from .skyscanner_parse import flight_search_url
 
@@ -35,6 +35,8 @@ def public_fare(row: dict, provider: str) -> dict | None:
         ):
             return None
         if provider == 'google_flights':
+            if row.get('google_completion_check') != GOOGLE_COMPLETION_CHECK:
+                return None
             url = build_route_url(origin, dest, dep, ret)
         elif provider == 'skyscanner':
             url = flight_search_url(origin, dest, dep, ret)

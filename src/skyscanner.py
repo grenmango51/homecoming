@@ -130,7 +130,7 @@ async def _handle_challenge(
         return page_text
 
     if os.environ.get("FLIGHT_FINDER_HUMAN_CHECKS_ONLY") == "1":
-        print("[Skyscanner] Human verification required. Complete it in the visible browser.", flush=True)
+        print("[Skyscanner] Human verification required; this price cannot be fetched automatically.", flush=True)
         if attended and challenge_timeout_seconds > 0:
             await wait_for_challenge_resolution(page, timeout_seconds=challenge_timeout_seconds)
             try:
@@ -558,10 +558,11 @@ async def run(args: argparse.Namespace) -> int:
     report_json: Path = results_dir / f"{REPORT_STEM}_{stamp}.json"
     report_csv: Path = results_dir / f"{REPORT_STEM}_{stamp}.csv"
     observations: list[dict[str, Any]] = []
+    headless = getattr(args, "headless", cfg.skyscanner.headless)
 
     async with async_playwright() as playwright:
         context: BrowserContext = await launch_skyscanner_context(
-            playwright, profile_dir, executable_path=browser_executable
+            playwright, profile_dir, executable_path=browser_executable, headless=headless
         )
         page = context.pages[0] if context.pages else await context.new_page()
 
@@ -844,6 +845,8 @@ def parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     res.add_argument("--profile-dir", default=str(cfg.skyscanner.resolved_profile_dir()))
     res.add_argument("--results-dir", default=str(cfg.skyscanner.resolved_results_dir()))
     res.add_argument("--browser-executable", default=cfg.execution.browser_executable, help="Custom path to Chrome/Edge executable")
+    res.add_argument("--headless", action=argparse.BooleanOptionalAction,
+                     default=cfg.skyscanner.headless, help="Run without a browser window")
     return res
 
 

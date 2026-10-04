@@ -126,6 +126,17 @@ class CardTests(unittest.TestCase):
 
 
 class PageStatusTests(unittest.TestCase):
+    def test_price_is_not_complete_while_nearby_airports_are_searching(self) -> None:
+        text = 'Top departing flights\nCheapest from €631\nSearching nearby airports...'
+        self.assertEqual(page_status(text), 'completion_unverified')
+        obs = make_observation(
+            origin='HEL', destination='HAN', departure=DEPARTURE, return_date=RETURN,
+            page_text=text, candidates=['1 stop 16 hr HEL HAN €956 round trip'],
+        )
+        self.assertEqual(obs['status'], 'completion_unverified')
+        self.assertIsNone(obs['lowest_observed_price_eur'])
+        self.assertIsNone(obs['completion_evidence'])
+
     def test_classification(self) -> None:
         self.assertEqual(page_status("6 results returned. Top departing flights"), "observed")
         self.assertEqual(page_status("Cheapest from €1,064"), "observed")
@@ -180,6 +191,16 @@ class ObservationTests(unittest.TestCase):
         )
         self.assertEqual(obs["status"], "blocked")
         self.assertIsNone(obs["lowest_observed_price_eur"])
+
+    def test_error_page_with_stale_priced_cards_never_publishes_a_fare(self) -> None:
+        obs = make_observation(
+            origin="HEL", destination="HAN", departure=DEPARTURE, return_date=RETURN,
+            page_text="Oops, something went wrong. Reload\nCheapest from €631",
+            candidates=[parse_eur_card_details("1 stop 12 hr HEL DOH HAN €900")],
+        )
+        self.assertEqual(obs["status"], "incomplete")
+        self.assertIsNone(obs["lowest_observed_price_eur"])
+        self.assertIsNone(obs["completion_evidence"])
 
 
 if __name__ == "__main__":

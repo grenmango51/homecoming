@@ -22,6 +22,15 @@ def write_toml(content: str) -> Path:
 
 
 class DefaultConfigTests(unittest.TestCase):
+    def test_background_browser_settings_load_for_both_providers(self) -> None:
+        path = write_toml('[google_flights]\nheadless = true\n[skyscanner]\nheadless = true\n')
+        try:
+            cfg = load_config(path)
+            self.assertTrue(cfg.google_flights.headless)
+            self.assertTrue(cfg.skyscanner.headless)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_shipped_config_loads(self) -> None:
         cfg = load_config()
         self.assertIsInstance(cfg, AppConfig)

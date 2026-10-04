@@ -615,7 +615,7 @@
       el.resultSummary.innerHTML = `
         <div class="summary-card is-empty">
           <span class="summary-icon empty" aria-hidden="true">…</span>
-          <div><p class="summary-title">Searching both providers…</p><p class="summary-copy">Keep this app open. The grid fills with verified prices as searches finish. If a browser asks for a human check, complete it there.</p></div>
+          <div><p class="summary-title">Searching both providers…</p><p class="summary-copy">Keep this app open. The grid fills with verified prices as searches finish. If a provider blocks a search, its status appears above.</p></div>
         </div>`;
       return;
     }
