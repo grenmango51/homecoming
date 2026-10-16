@@ -446,15 +446,31 @@ async def run(args: argparse.Namespace) -> int:
                         consecutive_blocks = 0
 
                     if index < len(pairs):
-                        await page.wait_for_timeout(args.delay_seconds * 1000)
+                        try:
+                            await page.wait_for_timeout(args.delay_seconds * 1000)
+                        except Exception as timeout_err:
+                            print(
+                                f"\n[Google Flights] Browser wait interrupted ({timeout_err}). "
+                                "Writing partial report and breaking loop gracefully...",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            run_interrupted = True
+                            break
 
                 written_reports.append((current_gl, cur_report_json, cur_report_csv))
                 if run_interrupted:
                     break
                 if m_idx < len(gl_list):
-                    await page.wait_for_timeout(args.delay_seconds * 1000)
+                    try:
+                        await page.wait_for_timeout(args.delay_seconds * 1000)
+                    except Exception:
+                        break
         finally:
-            await context.close()
+            try:
+                await context.close()
+            except Exception:
+                pass
 
     for gl_code, r_json, r_csv in written_reports:
         print(f"[Google Flights] Daily report ({gl_code}) written: {r_json.name}, {r_csv.name}")

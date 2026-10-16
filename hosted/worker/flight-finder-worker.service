@@ -1,0 +1,43 @@
+[Unit]
+Description=Flight Finder hosted search worker (outbound only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flightfinder
+Group=flightfinder
+WorkingDirectory=/opt/flight-finder/homecoming
+EnvironmentFile=/etc/flight-finder/worker.env
+ExecStart=/opt/flight-finder/venv/bin/python -u /opt/flight-finder/homecoming/hosted_worker.py
+Restart=on-failure
+RestartSec=10
+# Stopping the service kills every process in its own cgroup (worker + any scraper
+# children), never processes outside it.
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=yes
+TimeoutStopSec=30
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=false
+LockPersonality=true
+ReadWritePaths=/var/lib/flight-finder
+StateDirectory=flight-finder
+StateDirectoryMode=0700
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+

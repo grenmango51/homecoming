@@ -142,8 +142,16 @@ async def orchestrate(
     print("=" * 65 + "\n")
 
     if exit_codes and all(code != 0 for code in exit_codes.values()):
-        print("[Comparison] Skipping price comparison because all scrapers failed.")
-        return 2
+        has_any_reports = any(
+            (getattr(cfg, attr).resolved_results_dir() / f"daily_fare_report_{today}.csv").exists()
+            or (getattr(cfg, attr).resolved_results_dir() / f"daily_fare_report_{attr}_{today}.csv").exists()
+            for _, _, attr in SCRAPERS
+            if getattr(cfg, attr).enabled
+        )
+        if not has_any_reports:
+            print("[Comparison] Skipping price comparison because all scrapers failed with no data.")
+            return 2
+        print("[Comparison] Scrapers exited with warnings/errors, but daily reports exist. Proceeding with comparison...")
 
     comparison_failed = False
     if cfg.execution.auto_compare:

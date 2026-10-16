@@ -702,12 +702,6 @@ async def run(args: argparse.Namespace) -> int:
                 else:
                     consecutive_blocks = 0
 
-                if index < len(pairs):
-                    jitter = random.uniform(1.0, 3.0)
-                    pause_s = args.delay_seconds + jitter
-                    print(f"  [Politeness pause: {pause_s:.1f}s]")
-                    await page.wait_for_timeout(pause_s * 1000)
-
             # Second-pass sweep: retry any unverified or challenged pairs from this run
             if not run_interrupted and time.monotonic() < deadline - 60:
                 unverified_entries = [
@@ -764,10 +758,16 @@ async def run(args: argparse.Namespace) -> int:
                         else:
                             print(f"  [Sweep Result] {dep_date} -> {ret_date}: {sweep_obs.get('status')}")
 
-                        await page.wait_for_timeout(random.uniform(5.0, 8.0) * 1000)
+                        try:
+                            await page.wait_for_timeout(random.uniform(5.0, 8.0) * 1000)
+                        except Exception:
+                            break
 
         finally:
-            await context.close()
+            try:
+                await context.close()
+            except Exception:
+                pass
 
     if cfg.skyscanner.prune_cache:
         freed_mb = prune_profile_cache(profile_dir)

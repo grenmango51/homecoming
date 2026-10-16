@@ -60,7 +60,7 @@ profile_mode = "ephemeral"
 enabled = true
 
 # Delay between searches in seconds
-delay_seconds = 12
+delay_seconds = 2
 
 # Page load timeout in seconds
 timeout_seconds = 45
